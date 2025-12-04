@@ -93,8 +93,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
         let mut buffer = vec![0u8; inode_size as usize];
         self.reader.read_exact(&mut buffer)?;
 
-        let (_, inode) = Inode::parse(&buffer)
-            .map_err(|e| Ext4Error::Parse(format!("Failed to parse inode: {:?}", e)))?;
+        let inode = Inode::parse(&buffer)?;
 
         Ok(inode)
     }

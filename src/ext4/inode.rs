@@ -1,9 +1,11 @@
 use bitflags::bitflags;
-use nom::IResult;
-use nom::number::complete::{le_u16, le_u32};
+use nom::Finish;
+use nom_derive::{NomLE, Parse};
+
+use crate::{Ext4Error, Result};
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, NomLE)]
 pub struct Linux2 {
     pub l_i_blocks_high: u16,
     pub l_i_file_acl_high: u16,
@@ -14,25 +16,11 @@ pub struct Linux2 {
 }
 
 impl Linux2 {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, l_i_blocks_high) = le_u16(input)?;
-        let (input, l_i_file_acl_high) = le_u16(input)?;
-        let (input, l_i_uid_high) = le_u16(input)?;
-        let (input, l_i_gid_high) = le_u16(input)?;
-        let (input, l_i_checksum_lo) = le_u16(input)?;
-        let (input, l_i_reserved) = le_u16(input)?;
-
-        Ok((
-            input,
-            Linux2 {
-                l_i_blocks_high,
-                l_i_file_acl_high,
-                l_i_uid_high,
-                l_i_gid_high,
-                l_i_checksum_lo,
-                l_i_reserved,
-            },
-        ))
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        match Parse::parse(bytes).finish() {
+            Ok((_, descriptor)) => Ok(descriptor),
+            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+        }
     }
 }
 
@@ -61,7 +49,7 @@ bitflags! {
 }
 
 #[repr(C)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, NomLE)]
 pub struct Inode {
     pub mode: u16,
     pub uid: u16,
@@ -96,92 +84,35 @@ impl Inode {
     pub const JOURNAL_INODE: u32 = 8;
     pub const UNDEL_DIR_INODE: u32 = 6;
     pub const LOST_AND_FOUND_INODE: u32 = 11;
-    pub const EXT4_INODE_MODE_FILE: u16 = 0x8000;
-    pub const EXT4_INODE_MODE_DIR: u16 = 0x4000;
-    pub const EXT4_INODE_MODE_SYMLINK: u16 = 0xA000;
-    pub const EXT4_INODE_MODE_TYPE_MASK: u16 = 0xF000;
-    pub const EXT4_INODE_MODE_PERM_MASK: u16 = 0x0FFF;
-    pub const EXT4_INODE_BLOCK_SIZE: usize = 512;
-    pub const EXT4_GOOD_OLD_INODE_SIZE: u16 = 128;
-    pub const EXT4_INODE_FLAG_EXTENTS: u32 = 0x00080000;
+    pub const INODE_MODE_FILE: u16 = 0x8000;
+    pub const INODE_MODE_DIR: u16 = 0x4000;
+    pub const INODE_MODE_SYMLINK: u16 = 0xA000;
+    pub const INODE_MODE_TYPE_MASK: u16 = 0xF000;
+    pub const INODE_MODE_PERM_MASK: u16 = 0x0FFF;
+    pub const INODE_BLOCK_SIZE: usize = 512;
+    pub const GOOD_OLD_INODE_SIZE: u16 = 128;
+    pub const INODE_FLAG_EXTENTS: u32 = 0x00080000;
 
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, mode) = le_u16(input)?;
-        let (input, uid) = le_u16(input)?;
-        let (input, size) = le_u32(input)?;
-        let (input, atime) = le_u32(input)?;
-        let (input, ctime) = le_u32(input)?;
-        let (input, mtime) = le_u32(input)?;
-        let (input, dtime) = le_u32(input)?;
-        let (input, gid) = le_u16(input)?;
-        let (input, links_count) = le_u16(input)?;
-        let (input, blocks) = le_u32(input)?;
-        let (input, flags) = le_u32(input)?;
-        let (input, osd1) = le_u32(input)?;
-        let (input, block_vec) = nom::multi::count(le_u32, 15)(input)?;
-        let (input, generation) = le_u32(input)?;
-        let (input, file_acl) = le_u32(input)?;
-        let (input, size_hi) = le_u32(input)?;
-        let (input, faddr) = le_u32(input)?;
-        let (input, osd2) = Linux2::parse(input)?;
-        let (input, i_extra_isize) = le_u16(input)?;
-        let (input, i_checksum_hi) = le_u16(input)?;
-        let (input, i_ctime_extra) = le_u32(input)?;
-        let (input, i_mtime_extra) = le_u32(input)?;
-        let (input, i_atime_extra) = le_u32(input)?;
-        let (input, i_crtime) = le_u32(input)?;
-        let (input, i_crtime_extra) = le_u32(input)?;
-        let (input, i_version_hi) = le_u32(input)?;
-
-        let mut block_arr = [0u32; 15];
-        block_arr.copy_from_slice(&block_vec);
-
-        Ok((
-            input,
-            Inode {
-                mode,
-                uid,
-                size,
-                atime,
-                ctime,
-                mtime,
-                dtime,
-                gid,
-                links_count,
-                blocks,
-                flags,
-                osd1,
-                block: block_arr,
-                generation,
-                file_acl,
-                size_hi,
-                faddr,
-                osd2,
-                i_extra_isize,
-                i_checksum_hi,
-                i_ctime_extra,
-                i_mtime_extra,
-                i_atime_extra,
-                i_crtime,
-                i_crtime_extra,
-                i_version_hi,
-            },
-        ))
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        match Parse::parse(bytes).finish() {
+            Ok((_, descriptor)) => Ok(descriptor),
+            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+        }
     }
 
     pub fn is_directory(&self) -> bool {
-        (self.mode & Self::EXT4_INODE_MODE_TYPE_MASK) == Self::EXT4_INODE_MODE_DIR
+        (self.mode & Self::INODE_MODE_TYPE_MASK) == Self::INODE_MODE_DIR
     }
 
     pub fn is_regular_file(&self) -> bool {
-        (self.mode & Self::EXT4_INODE_MODE_TYPE_MASK) == Self::EXT4_INODE_MODE_FILE
+        (self.mode & Self::INODE_MODE_TYPE_MASK) == Self::INODE_MODE_FILE
     }
 
     pub fn is_symlink(&self) -> bool {
-        (self.mode & Self::EXT4_INODE_MODE_TYPE_MASK) == Self::EXT4_INODE_MODE_SYMLINK
+        (self.mode & Self::INODE_MODE_TYPE_MASK) == Self::INODE_MODE_SYMLINK
     }
 
     pub fn uses_extents(&self) -> bool {
-        (self.flags & Self::EXT4_INODE_FLAG_EXTENTS) != 0
+        (self.flags & Self::INODE_FLAG_EXTENTS) != 0
     }
 }
