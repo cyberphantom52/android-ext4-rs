@@ -1,55 +1,77 @@
+use nom::IResult;
+use nom::number::complete::{le_u16, le_u32};
+
 use super::Ext4Lblk;
 
 #[derive(Debug, Default, Clone, Copy)]
 #[repr(C)]
 pub struct ExtentHeader {
-    /// Magic number, 0xF30A.
     pub magic: u16,
-
-    /// Number of valid entries following the header.
     pub entries_count: u16,
-
-    /// Maximum number of entries that could follow the header.
     pub max_entries_count: u16,
-
-    /// Depth of this extent node in the extent tree. Depth 0 indicates that this node points to data blocks.
     pub depth: u16,
-
-    /// Generation of the tree (used by Lustre, but not standard in ext4).
     pub generation: u32,
 }
 
-/// Structure representing an index node within an extent tree.
+impl ExtentHeader {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, magic) = le_u16(input)?;
+        let (input, entries_count) = le_u16(input)?;
+        let (input, max_entries_count) = le_u16(input)?;
+        let (input, depth) = le_u16(input)?;
+        let (input, generation) = le_u32(input)?;
+
+        Ok((
+            input,
+            ExtentHeader {
+                magic,
+                entries_count,
+                max_entries_count,
+                depth,
+                generation,
+            },
+        ))
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 #[repr(C)]
 pub struct ExtentIndex {
-    /// Block number from which this index node starts.
     pub first_block: u32,
-
-    /// Lower 32-bits of the block number to which this index points.
     pub leaf_lo: u32,
-
-    /// Upper 16-bits of the block number to which this index points.
     pub leaf_hi: u16,
-
-    /// Padding for alignment.
     pub padding: u16,
 }
 
-/// Structure representing an Ext4 extent.
+impl ExtentIndex {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, first_block) = le_u32(input)?;
+        let (input, leaf_lo) = le_u32(input)?;
+        let (input, leaf_hi) = le_u16(input)?;
+        let (input, padding) = le_u16(input)?;
+
+        Ok((
+            input,
+            ExtentIndex {
+                first_block,
+                leaf_lo,
+                leaf_hi,
+                padding,
+            },
+        ))
+    }
+
+    pub fn leaf_block(&self) -> u64 {
+        ((self.leaf_hi as u64) << 32) | (self.leaf_lo as u64)
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Extent {
-    /// First file block number that this extent covers.
     pub first_block: u32,
-
-    /// Number of blocks covered by this extent.
     pub block_count: u16,
-
-    /// Upper 16-bits of the block number to which this extent points.
     pub start_hi: u16,
-
-    /// Lower 32-bits of the block number to which this extent points.
     pub start_lo: u32,
 }
 
@@ -62,4 +84,37 @@ impl Extent {
     pub const EXT4_EXTENT_SIZE: usize = 12;
     pub const EXT4_EXTENT_INDEX_SIZE: usize = 12;
     pub const MAX_EXTENT_INDEX_COUNT: usize = 340;
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, first_block) = le_u32(input)?;
+        let (input, block_count) = le_u16(input)?;
+        let (input, start_hi) = le_u16(input)?;
+        let (input, start_lo) = le_u32(input)?;
+
+        Ok((
+            input,
+            Extent {
+                first_block,
+                block_count,
+                start_hi,
+                start_lo,
+            },
+        ))
+    }
+
+    pub fn start_block(&self) -> u64 {
+        ((self.start_hi as u64) << 32) | (self.start_lo as u64)
+    }
+
+    pub fn is_unwritten(&self) -> bool {
+        self.block_count > Self::EXT_INIT_MAX_LEN
+    }
+
+    pub fn get_actual_len(&self) -> u16 {
+        if self.is_unwritten() {
+            self.block_count - Self::EXT_INIT_MAX_LEN
+        } else {
+            self.block_count
+        }
+    }
 }

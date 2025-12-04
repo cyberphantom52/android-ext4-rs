@@ -1,60 +1,122 @@
-use std::cmp::Ordering;
+use nom::IResult;
+use nom::number::complete::{le_u16, le_u32};
 
-use crate::ext4::superblock::Superblock;
-
-/// Represents the structure of an Ext4 block group descriptor.
 #[derive(Debug, Default, Clone, Copy)]
 #[repr(C, packed)]
 pub struct BlockGroupDescriptor {
-    /// Block bitmap block
     block_bitmap_lo: u32,
-    /// Inode bitmap block
     inode_bitmap_lo: u32,
-    /// Inode table block
     inode_table_first_block_lo: u32,
-    /// Free blocks count
     free_blocks_count_lo: u16,
-    /// Free inodes count
     free_inodes_count_lo: u16,
-    /// Directories count
     used_dirs_count_lo: u16,
-    /// EXT4_BG_flags (INODE_UNINIT, etc)
     flags: u16,
-    /// Snapshot exclusion bitmap
     exclude_bitmap_lo: u32,
-    /// crc32c(s_uuid+grp_num+bbitmap) LE
     block_bitmap_csum_lo: u16,
-    /// crc32c(s_uuid+grp_num+ibitmap) LE
     inode_bitmap_csum_lo: u16,
-    /// Unused inodes count
     itable_unused_lo: u16,
-    /// crc16(sb_uuid+group+desc)
     checksum: u16,
-    /// Block bitmap block MSB
     block_bitmap_hi: u32,
-    /// Inode bitmap block MSB
     inode_bitmap_hi: u32,
-    /// Inode table block MSB
     inode_table_first_block_hi: u32,
-    /// Free blocks count MSB
     free_blocks_count_hi: u16,
-    /// Free inodes count MSB
     free_inodes_count_hi: u16,
-    /// Directories count MSB
     used_dirs_count_hi: u16,
-    /// Unused inodes count MSB
     itable_unused_hi: u16,
-    /// Snapshot exclusion bitmap MSB
     exclude_bitmap_hi: u32,
-    /// crc32c(s_uuid+grp_num+bbitmap) BE
     block_bitmap_csum_hi: u16,
-    /// crc32c(s_uuid+grp_num+ibitmap) BE
     inode_bitmap_csum_hi: u16,
-    /// Padding
     reserved: u32,
 }
 
 impl BlockGroupDescriptor {
     pub const MIN_SIZE: u16 = 32;
     pub const MAX_SIZE: u16 = 64;
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, block_bitmap_lo) = le_u32(input)?;
+        let (input, inode_bitmap_lo) = le_u32(input)?;
+        let (input, inode_table_first_block_lo) = le_u32(input)?;
+        let (input, free_blocks_count_lo) = le_u16(input)?;
+        let (input, free_inodes_count_lo) = le_u16(input)?;
+        let (input, used_dirs_count_lo) = le_u16(input)?;
+        let (input, flags) = le_u16(input)?;
+        let (input, exclude_bitmap_lo) = le_u32(input)?;
+        let (input, block_bitmap_csum_lo) = le_u16(input)?;
+        let (input, inode_bitmap_csum_lo) = le_u16(input)?;
+        let (input, itable_unused_lo) = le_u16(input)?;
+        let (input, checksum) = le_u16(input)?;
+        let (input, block_bitmap_hi) = le_u32(input)?;
+        let (input, inode_bitmap_hi) = le_u32(input)?;
+        let (input, inode_table_first_block_hi) = le_u32(input)?;
+        let (input, free_blocks_count_hi) = le_u16(input)?;
+        let (input, free_inodes_count_hi) = le_u16(input)?;
+        let (input, used_dirs_count_hi) = le_u16(input)?;
+        let (input, itable_unused_hi) = le_u16(input)?;
+        let (input, exclude_bitmap_hi) = le_u32(input)?;
+        let (input, block_bitmap_csum_hi) = le_u16(input)?;
+        let (input, inode_bitmap_csum_hi) = le_u16(input)?;
+        let (input, reserved) = le_u32(input)?;
+
+        Ok((
+            input,
+            BlockGroupDescriptor {
+                block_bitmap_lo,
+                inode_bitmap_lo,
+                inode_table_first_block_lo,
+                free_blocks_count_lo,
+                free_inodes_count_lo,
+                used_dirs_count_lo,
+                flags,
+                exclude_bitmap_lo,
+                block_bitmap_csum_lo,
+                inode_bitmap_csum_lo,
+                itable_unused_lo,
+                checksum,
+                block_bitmap_hi,
+                inode_bitmap_hi,
+                inode_table_first_block_hi,
+                free_blocks_count_hi,
+                free_inodes_count_hi,
+                used_dirs_count_hi,
+                itable_unused_hi,
+                exclude_bitmap_hi,
+                block_bitmap_csum_hi,
+                inode_bitmap_csum_hi,
+                reserved,
+            },
+        ))
+    }
+
+    pub fn block_bitmap(&self) -> u64 {
+        ((self.block_bitmap_hi as u64) << 32) | (self.block_bitmap_lo as u64)
+    }
+
+    pub fn inode_bitmap(&self) -> u64 {
+        ((self.inode_bitmap_hi as u64) << 32) | (self.inode_bitmap_lo as u64)
+    }
+
+    pub fn inode_table_first_block(&self) -> u64 {
+        ((self.inode_table_first_block_hi as u64) << 32) | (self.inode_table_first_block_lo as u64)
+    }
+
+    pub fn free_blocks_count(&self) -> u32 {
+        ((self.free_blocks_count_hi as u32) << 16) | (self.free_blocks_count_lo as u32)
+    }
+
+    pub fn free_inodes_count(&self) -> u32 {
+        ((self.free_inodes_count_hi as u32) << 16) | (self.free_inodes_count_lo as u32)
+    }
+
+    pub fn used_dirs_count(&self) -> u32 {
+        ((self.used_dirs_count_hi as u32) << 16) | (self.used_dirs_count_lo as u32)
+    }
+
+    pub fn itable_unused(&self) -> u32 {
+        ((self.itable_unused_hi as u32) << 16) | (self.itable_unused_lo as u32)
+    }
+
+    pub fn exclude_bitmap(&self) -> u64 {
+        ((self.exclude_bitmap_hi as u64) << 32) | (self.exclude_bitmap_lo as u64)
+    }
 }

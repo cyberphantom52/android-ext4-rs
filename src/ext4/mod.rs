@@ -1,21 +1,29 @@
 mod block;
 mod extent;
 mod inode;
+mod reader;
 mod superblock;
 
-pub const BLOCK_SIZE: usize = 0x1000; // 4KB
+pub use block::BlockGroupDescriptor;
+pub use extent::{Extent, ExtentHeader, ExtentIndex};
+pub use inode::{Inode, InodeFileType, InodePerm, Linux2};
+pub use reader::Ext4Reader;
+pub use superblock::Superblock;
+
+use thiserror::Error;
+
+pub const BLOCK_SIZE: usize = 0x1000;
 pub const SECTORS_PER_BLOCK: usize = BLOCK_SIZE / 512;
 
 pub type Ext4Lblk = u32;
 pub type Ext4Fsblk = u64;
 
-pub const EOK: usize = 0;
+pub const EXT4_MAX_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024;
 
-/// File
-pub const EXT4_MAX_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16TB
-
-/// libc file open flags
 pub const O_ACCMODE: i32 = 0o0003;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
 pub enum OpenFlags {
     ReadOnly = 0,
     WriteOnly = 1,
@@ -38,39 +46,63 @@ pub enum OpenFlags {
     DSync = 0o10000,
 }
 
-/// linux access syscall flags
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum AccessMode {
-    Exist = 0b000,   // Test for existence of file
-    Execute = 0b001, // Test for execute or search permission
-    Write = 0b010,   // Test for write permission
-    Read = 0b100,    // Test for read permission
+    Exist = 0b000,
+    Execute = 0b001,
+    Write = 0b010,
+    Read = 0b100,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DirEntryType {
+    Unknown = 0,
+    RegFile = 1,
+    Dir = 2,
+    ChrDev = 3,
+    BlkDev = 4,
+    Fifo = 5,
+    Sock = 6,
+    Symlink = 7,
+}
+
+impl DirEntryType {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Unknown,
+            1 => Self::RegFile,
+            2 => Self::Dir,
+            3 => Self::ChrDev,
+            4 => Self::BlkDev,
+            5 => Self::Fifo,
+            6 => Self::Sock,
+            7 => Self::Symlink,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DirectoryEntry {
-    pub inode: u32,                    // Inode number this entry points to
-    pub entry_len: u16,                // Distance to the next directory entry
-    pub name_len: u8,                  // Lower 8 bits of name length
-    pub inner: DirectoryEntryInternal, // Union member
-    pub name: [u8; 255],               // File name
+    pub inode: u32,
+    pub entry_len: u16,
+    pub name_len: u8,
+    pub inode_type: u8,
+    pub name: [u8; 255],
 }
 
-/// Internal directory entry structure.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union DirectoryEntryInternal {
-    pub name_length_high: u8, // Higher 8 bits of name length
-    pub inode_type: u8,       // Type of the referenced inode (in rev >= 0.5)
-}
+impl DirectoryEntry {
+    pub fn name_str(&self) -> &str {
+        let len = self.name_len as usize;
+        std::str::from_utf8(&self.name[..len]).unwrap_or("")
+    }
 
-/// Fake directory entry structure. Used for directory entry iteration.
-#[repr(C)]
-pub struct FakeDirectoryEntry {
-    inode: u32,
-    entry_length: u16,
-    name_length: u8,
-    inode_type: u8,
+    pub fn entry_type(&self) -> DirEntryType {
+        DirEntryType::from_u8(self.inode_type)
+    }
 }
 
 #[repr(C)]
@@ -80,26 +112,50 @@ pub struct DirectoryEntryTail {
     pub rec_len: u16,
     pub reserved_zero2: u8,
     pub reserved_ft: u8,
-    pub checksum: u32, // crc32c(uuid+inum+dirblock)
+    pub checksum: u32,
 }
 
 pub struct DirectorySearchResult {
     pub dentry: DirectoryEntry,
-    pub pblock_id: usize,   // disk block id
-    pub offset: usize,      // offset in block
-    pub prev_offset: usize, //prev direntry offset
+    pub pblock_id: u64,
+    pub offset: usize,
+    pub prev_offset: usize,
 }
 
-bitflags::bitflags! {
-    #[derive(PartialEq, Eq)]
-    pub struct DirEntryType: u8 {
-        const EXT4_DE_UNKNOWN = 0;
-        const EXT4_DE_REG_FILE = 1;
-        const EXT4_DE_DIR = 2;
-        const EXT4_DE_CHRDEV = 3;
-        const EXT4_DE_BLKDEV = 4;
-        const EXT4_DE_FIFO = 5;
-        const EXT4_DE_SOCK = 6;
-        const EXT4_DE_SYMLINK = 7;
-    }
+#[derive(Error, Debug)]
+pub enum Ext4Error {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    #[error("Invalid magic number")]
+    InvalidMagic,
+
+    #[error("Invalid superblock")]
+    InvalidSuperblock,
+
+    #[error("Invalid inode: {0}")]
+    InvalidInode(u32),
+
+    #[error("Invalid block group: {0}")]
+    InvalidBlockGroup(u32),
+
+    #[error("Invalid extent")]
+    InvalidExtent,
+
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+
+    #[error("Not a directory")]
+    NotADirectory,
+
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
+
+    #[error("Read beyond file size")]
+    ReadBeyondEof,
 }
+
+pub type Result<T> = std::result::Result<T, Ext4Error>;
