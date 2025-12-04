@@ -21,12 +21,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
         let mut sb_buf = vec![0u8; 1024];
         reader.read_exact(&mut sb_buf)?;
 
-        let (_, superblock) = Superblock::parse(&sb_buf)
-            .map_err(|e| Ext4Error::Parse(format!("Failed to parse superblock: {:?}", e)))?;
-
-        if superblock.magic != Superblock::EXT4_SUPERBLOCK_MAGIC {
-            return Err(Ext4Error::InvalidMagic);
-        }
+        let superblock = Superblock::parse(&sb_buf)?;
 
         let block_size = superblock.block_size();
 
