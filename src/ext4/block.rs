@@ -1,9 +1,10 @@
+use bitflags::bitflags;
 use nom::Finish;
 use nom_derive::{NomLE, Parse};
 
 use crate::{Ext4Error, Result};
 
-#[derive(Debug, Default, Clone, Copy, NomLE)]
+#[derive(Debug, Clone, Copy, NomLE)]
 #[repr(C, packed)]
 pub struct BlockGroupDescriptor {
     block_bitmap_lo: u32,
@@ -12,7 +13,8 @@ pub struct BlockGroupDescriptor {
     free_blocks_count_lo: u16,
     free_inodes_count_lo: u16,
     used_dirs_count_lo: u16,
-    flags: u16,
+    #[nom(Parse = "Flags::parse")]
+    flags: Flags,
     exclude_bitmap_lo: u32,
     block_bitmap_csum_lo: u16,
     inode_bitmap_csum_lo: u16,
@@ -85,5 +87,21 @@ impl BlockGroupDescriptor {
 
     pub fn exclude_bitmap(&self) -> u64 {
         ((self.exclude_bitmap_hi.unwrap_or(0) as u64) << 32) | (self.exclude_bitmap_lo as u64)
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Flags: u16 {
+        const InodeTableUninitialized = 0x0001;
+        const BlockBitmapUninitialized = 0x0002;
+        const InodeTableZeroed = 0x0004;
+    }
+}
+
+impl Flags {
+    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (input, bits) = nom::number::complete::le_u16(input)?;
+        Ok((input, Flags::from_bits_truncate(bits)))
     }
 }
