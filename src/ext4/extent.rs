@@ -6,19 +6,19 @@ use super::Ext4Lblk;
 
 #[derive(Debug, Default, Clone, Copy, NomLE)]
 #[repr(C)]
-pub struct ExtentHeader<'a> {
-    #[nom(Tag([0x0A, 0xF3]))]
-    pub magic: &'a [u8],
+pub struct ExtentHeader {
+    #[nom(Verify = "*magic == 0xF30A")]
+    pub magic: u16,
     pub entries_count: u16,
     pub max_entries_count: u16,
     pub depth: u16,
     pub generation: u32,
 }
 
-impl<'a> ExtentHeader<'a> {
+impl ExtentHeader {
     pub const SIZE: usize = 12;
 
-    pub fn parse(bytes: &'a [u8]) -> Result<Self> {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
             Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
