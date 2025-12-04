@@ -34,6 +34,7 @@ impl BlockGroupDescriptor {
     pub const MAX_SIZE: u16 = 64;
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let original_input = input;
         let (input, block_bitmap_lo) = le_u32(input)?;
         let (input, inode_bitmap_lo) = le_u32(input)?;
         let (input, inode_table_first_block_lo) = le_u32(input)?;
@@ -46,17 +47,50 @@ impl BlockGroupDescriptor {
         let (input, inode_bitmap_csum_lo) = le_u16(input)?;
         let (input, itable_unused_lo) = le_u16(input)?;
         let (input, checksum) = le_u16(input)?;
-        let (input, block_bitmap_hi) = le_u32(input)?;
-        let (input, inode_bitmap_hi) = le_u32(input)?;
-        let (input, inode_table_first_block_hi) = le_u32(input)?;
-        let (input, free_blocks_count_hi) = le_u16(input)?;
-        let (input, free_inodes_count_hi) = le_u16(input)?;
-        let (input, used_dirs_count_hi) = le_u16(input)?;
-        let (input, itable_unused_hi) = le_u16(input)?;
-        let (input, exclude_bitmap_hi) = le_u32(input)?;
-        let (input, block_bitmap_csum_hi) = le_u16(input)?;
-        let (input, inode_bitmap_csum_hi) = le_u16(input)?;
-        let (input, reserved) = le_u32(input)?;
+
+        let bytes_read = original_input.len() - input.len();
+        let remaining = original_input.len() - bytes_read;
+
+        let (
+            block_bitmap_hi,
+            inode_bitmap_hi,
+            inode_table_first_block_hi,
+            free_blocks_count_hi,
+            free_inodes_count_hi,
+            used_dirs_count_hi,
+            itable_unused_hi,
+            exclude_bitmap_hi,
+            block_bitmap_csum_hi,
+            inode_bitmap_csum_hi,
+            reserved,
+        ) = if remaining >= 32 {
+            let (input, block_bitmap_hi) = le_u32(input)?;
+            let (input, inode_bitmap_hi) = le_u32(input)?;
+            let (input, inode_table_first_block_hi) = le_u32(input)?;
+            let (input, free_blocks_count_hi) = le_u16(input)?;
+            let (input, free_inodes_count_hi) = le_u16(input)?;
+            let (input, used_dirs_count_hi) = le_u16(input)?;
+            let (input, itable_unused_hi) = le_u16(input)?;
+            let (input, exclude_bitmap_hi) = le_u32(input)?;
+            let (input, block_bitmap_csum_hi) = le_u16(input)?;
+            let (input, inode_bitmap_csum_hi) = le_u16(input)?;
+            let (_input, reserved) = le_u32(input)?;
+            (
+                block_bitmap_hi,
+                inode_bitmap_hi,
+                inode_table_first_block_hi,
+                free_blocks_count_hi,
+                free_inodes_count_hi,
+                used_dirs_count_hi,
+                itable_unused_hi,
+                exclude_bitmap_hi,
+                block_bitmap_csum_hi,
+                inode_bitmap_csum_hi,
+                reserved,
+            )
+        } else {
+            (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        };
 
         Ok((
             input,
