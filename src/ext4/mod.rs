@@ -6,7 +6,7 @@ mod superblock;
 
 pub use block::BlockGroupDescriptor;
 pub use extent::{Extent, ExtentHeader, ExtentIndex};
-pub use inode::{Inode, InodeFileType, InodePerm, Linux2};
+pub use inode::{Inode, Linux2};
 pub use reader::Ext4Reader;
 pub use superblock::Superblock;
 

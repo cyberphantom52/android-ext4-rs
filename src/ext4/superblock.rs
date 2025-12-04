@@ -158,11 +158,8 @@ impl Superblock {
     }
 
     pub fn inode_size_file(&self, inode: &Inode) -> u64 {
-        let mode = inode.mode;
         let mut v = inode.size as u64;
-        if self.rev_level == Revision::Dynamic
-            && (mode & Inode::INODE_MODE_TYPE_MASK) == Inode::INODE_MODE_FILE
-        {
+        if self.rev_level == Revision::Dynamic && inode.is_regular_file() {
             let hi = (inode.size_hi as u64) << 32;
             v |= hi;
         }
