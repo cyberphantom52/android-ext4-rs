@@ -1,5 +1,6 @@
 use crate::ext4::{block::BlockGroupDescriptor, inode::Inode};
 use crate::{Ext4Error, Result};
+use bitflags::bitflags;
 use nom::Finish;
 use nom_derive::{NomLE, Parse};
 use std::cmp::Ordering;
@@ -26,21 +27,27 @@ pub struct Superblock {
     #[nom(Verify = "*magic == 0xEF53")]
     pub magic: u16,
 
-    pub state: u16,
-    pub errors: u16,
+    pub state: State,
+    pub errors: ErrorPolicy,
     pub minor_rev_level: u16,
     pub last_check_time: u32,
     pub check_interval: u32,
-    pub creator_os: u32,
-    pub rev_level: u32,
+    pub creator_os: CreatorOS,
+    pub rev_level: Revision,
     pub def_resuid: u16,
     pub def_resgid: u16,
     pub first_inode: u32,
     pub inode_size: u16,
     pub block_group_index: u16,
-    pub features_compatible: u32,
-    pub features_incompatible: u32,
-    pub features_read_only: u32,
+
+    #[nom(Parse = "CompatibleFeatures::parse")]
+    pub features_compatible: CompatibleFeatures,
+
+    #[nom(Parse = "IncompatibleFeatures::parse")]
+    pub features_incompatible: IncompatibleFeatures,
+
+    #[nom(Parse = "ReadOnlyCompatibleFeatures::parse")]
+    pub features_read_only: ReadOnlyCompatibleFeatures,
 
     #[nom(Count = "16")]
     pub uuid: Vec<u8>,
@@ -66,10 +73,13 @@ pub struct Superblock {
     #[nom(Count = "4")]
     pub hash_seed: Vec<u32>,
 
-    pub default_hash_version: u8,
+    pub default_hash_version: DefaultHashVersion,
     pub journal_backup_type: u8,
     pub desc_size: u16,
-    pub default_mount_opts: u32,
+
+    #[nom(Parse = "DefaultMountOptions::parse")]
+    pub default_mount_opts: DefaultMountOptions,
+
     pub first_meta_bg: u32,
     pub mkfs_time: u32,
 
@@ -81,7 +91,8 @@ pub struct Superblock {
     pub free_blocks_count_hi: u32,
     pub min_extra_isize: u16,
     pub want_extra_isize: u16,
-    pub flags: u32,
+    #[nom(Parse = "Flags::parse")]
+    pub flags: Flags,
     pub raid_stride: u16,
     pub mmp_interval: u16,
     pub mmp_block: u64,
@@ -122,7 +133,7 @@ pub struct Superblock {
     pub backup_bgs: Vec<u32>,
 
     #[nom(Count = "4")]
-    pub encrypt_algos: Vec<u8>,
+    pub encrypt_algos: Vec<EncryptionAlgorithm>,
 
     #[nom(Count = "16")]
     pub encrypt_pw_salt: Vec<u8>,
@@ -149,7 +160,9 @@ impl Superblock {
     pub fn inode_size_file(&self, inode: &Inode) -> u64 {
         let mode = inode.mode;
         let mut v = inode.size as u64;
-        if self.rev_level > 0 && (mode & Inode::INODE_MODE_TYPE_MASK) == Inode::INODE_MODE_FILE {
+        if self.rev_level == Revision::Dynamic
+            && (mode & Inode::INODE_MODE_TYPE_MASK) == Inode::INODE_MODE_FILE
+        {
             let hi = (inode.size_hi as u64) << 32;
             v |= hi;
         }
@@ -196,4 +209,180 @@ impl Superblock {
     pub fn free_blocks_count(&self) -> u64 {
         self.free_blocks_count_lo as u64 | ((self.free_blocks_count_hi as u64) << 32)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]
+#[repr(u16)]
+pub enum State {
+    Clean = 0x0001,
+    Errors = 0x0002,
+    Orphan = 0x0004,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]
+#[repr(u16)]
+pub enum ErrorPolicy {
+    Continue = 1,
+    ReadOnly = 2,
+    Panic = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]
+#[repr(u32)]
+pub enum Revision {
+    Original = 0,
+    Dynamic = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]
+#[repr(u32)]
+pub enum CreatorOS {
+    Linux = 0,
+    Hurd = 1,
+    Masix = 2,
+    FreeBSD = 3,
+    Lites = 4,
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CompatibleFeatures: u32 {
+        const DirectoryPreallocation = 0x0001;
+        const IMagicInode = 0x0002;
+        const HasJournal = 0x0004;
+        const ExtendedAttributes = 0x0008;
+        const ResizeInode = 0x0010;
+        const DirectoryIndices = 0x0020;
+        const LazyBlockGroups = 0x0040;
+        const ExcludeInode = 0x0080;
+        const ExcludeBitmap = 0x0100;
+        const SparseSuper2 = 0x0200;
+        const FastCommit = 0x0400;
+        const OrphanFile = 0x1000;
+    }
+}
+
+impl CompatibleFeatures {
+    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (input, bits) = nom::number::complete::le_u32(input)?;
+        Ok((input, Self::from_bits_truncate(bits)))
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct IncompatibleFeatures: u32 {
+        const Compression = 0x0001;
+        const FileType = 0x0002;
+        const NeedsRecovery = 0x0004;
+        const JournalDevice = 0x0008;
+        const MetaBlockGroups = 0x0010;
+        const Extents = 0x0040;
+        const Bit64 = 0x0080;
+        const MultipleMountProtection = 0x0100;
+        const FlexibleBlockGroups = 0x0200;
+        const ExtendedAttributeInodes = 0x0400;
+        const DirectoryData = 0x1000;
+        const ChecksumSeed = 0x2000;
+        const LargeDirectory = 0x4000;
+        const InlineData = 0x8000;
+        const EncryptedInodes = 0x10000;
+    }
+}
+
+impl IncompatibleFeatures {
+    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (input, bits) = nom::number::complete::le_u32(input)?;
+        Ok((input, Self::from_bits_truncate(bits)))
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ReadOnlyCompatibleFeatures: u32 {
+        const SparseSuper = 0x0001;
+        const LargeFile = 0x0002;
+        const BTreeDirectory = 0x0004;
+        const HugeFile = 0x0008;
+        const GroupDescriptorChecksum = 0x0010;
+        const NoDirectoryLinkLimit = 0x0020;
+        const ExtraInodeSize = 0x0040;
+        const HasSnapshot = 0x0080;
+        const Quota = 0x0100;
+        const BigAlloc = 0x0200;
+        const MetadataChecksum = 0x0400;
+        const Replica = 0x0800;
+        const ReadOnly = 0x1000;
+        const ProjectQuota = 0x2000;
+        const Verity = 0x8000;
+        const OrphanPresent = 0x10000;
+    }
+}
+
+impl ReadOnlyCompatibleFeatures {
+    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (input, bits) = nom::number::complete::le_u32(input)?;
+        Ok((input, Self::from_bits_truncate(bits)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]
+#[repr(u8)]
+pub enum DefaultHashVersion {
+    Legacy = 0,
+    HalfMD4 = 1,
+    Tea = 2,
+    LegacyUnsigned = 3,
+    HalfMD4Unsigned = 4,
+    TeaUnsigned = 5,
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct DefaultMountOptions: u32 {
+        const Debug = 0x0001;
+        const BsdGroups = 0x0002;
+        const ExtendedAttributeUser = 0x0004;
+        const Acl = 0x0008;
+        const Uid16 = 0x0010;
+        const JournalModeData = 0x0020;
+        const JournalModeOrdered = 0x0040;
+        const JournalModeWriteback = 0x0060;
+        const NoBarrier = 0x0100;
+        const BlockValidity = 0x0200;
+        const Discard = 0x0400;
+        const NoDelayedAllocation = 0x0800;
+    }
+}
+
+impl DefaultMountOptions {
+    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (input, bits) = nom::number::complete::le_u32(input)?;
+        Ok((input, Self::from_bits_truncate(bits)))
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Flags: u32 {
+        const SignedDirectoryHash = 0x0001;
+        const UnsignedDirectoryHash = 0x0002;
+        const DevelopmentMode = 0x0004;
+    }
+}
+
+impl Flags {
+    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (input, bits) = nom::number::complete::le_u32(input)?;
+        Ok((input, Flags::from_bits_truncate(bits)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]
+#[repr(u8)]
+pub enum EncryptionAlgorithm {
+    Invalid = 0,
+    Aes256Xts = 1,
+    Aes256Gcm = 2,
+    Aes256Cbc = 3,
 }
