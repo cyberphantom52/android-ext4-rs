@@ -69,11 +69,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
         let mut buffer = vec![0u8; desc_size as usize];
         self.reader.read_exact(&mut buffer)?;
 
-        let (_, desc) = BlockGroupDescriptor::parse(&buffer).map_err(|e| {
-            Ext4Error::Parse(format!("Failed to parse block group descriptor: {:?}", e))
-        })?;
-
-        Ok(desc)
+        BlockGroupDescriptor::parse(&buffer)
     }
 
     pub fn read_inode(&mut self, inode_num: u32) -> Result<Inode> {
