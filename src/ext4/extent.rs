@@ -1,40 +1,32 @@
-use nom::IResult;
-use nom::number::complete::{le_u16, le_u32};
+use crate::{Ext4Error, Result};
+use nom::Finish;
+use nom_derive::{NomLE, Parse};
 
 use super::Ext4Lblk;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, NomLE)]
 #[repr(C)]
-pub struct ExtentHeader {
-    pub magic: u16,
+pub struct ExtentHeader<'a> {
+    #[nom(Tag([0x0A, 0xF3]))]
+    pub magic: &'a [u8],
     pub entries_count: u16,
     pub max_entries_count: u16,
     pub depth: u16,
     pub generation: u32,
 }
 
-impl ExtentHeader {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, magic) = le_u16(input)?;
-        let (input, entries_count) = le_u16(input)?;
-        let (input, max_entries_count) = le_u16(input)?;
-        let (input, depth) = le_u16(input)?;
-        let (input, generation) = le_u32(input)?;
+impl<'a> ExtentHeader<'a> {
+    pub const SIZE: usize = 12;
 
-        Ok((
-            input,
-            ExtentHeader {
-                magic,
-                entries_count,
-                max_entries_count,
-                depth,
-                generation,
-            },
-        ))
+    pub fn parse(bytes: &'a [u8]) -> Result<Self> {
+        match Parse::parse(bytes).finish() {
+            Ok((_, descriptor)) => Ok(descriptor),
+            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+        }
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, NomLE)]
 #[repr(C)]
 pub struct ExtentIndex {
     pub first_block: u32,
@@ -44,21 +36,14 @@ pub struct ExtentIndex {
 }
 
 impl ExtentIndex {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, first_block) = le_u32(input)?;
-        let (input, leaf_lo) = le_u32(input)?;
-        let (input, leaf_hi) = le_u16(input)?;
-        let (input, padding) = le_u16(input)?;
+    pub const SIZE: usize = 12;
+    pub const MAX_INDEX_COUNT: usize = 340;
 
-        Ok((
-            input,
-            ExtentIndex {
-                first_block,
-                leaf_lo,
-                leaf_hi,
-                padding,
-            },
-        ))
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        match Parse::parse(bytes).finish() {
+            Ok((_, descriptor)) => Ok(descriptor),
+            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+        }
     }
 
     pub fn leaf_block(&self) -> u64 {
@@ -66,7 +51,7 @@ impl ExtentIndex {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, NomLE)]
 #[repr(C)]
 pub struct Extent {
     pub first_block: u32,
@@ -76,30 +61,16 @@ pub struct Extent {
 }
 
 impl Extent {
-    pub const EXT_INIT_MAX_LEN: u16 = 32768;
-    pub const EXT_UNWRITTEN_MAX_LEN: u16 = 65535;
+    pub const SIZE: usize = 12;
+    pub const INIT_MAX_LEN: u16 = 32768;
+    pub const UNWRITTEN_MAX_LEN: u16 = 65535;
     pub const EXT_MAX_BLOCKS: Ext4Lblk = u32::MAX;
-    pub const EXT4_EXTENT_MAGIC: u16 = 0xF30A;
-    pub const EXT4_EXTENT_HEADER_SIZE: usize = 12;
-    pub const EXT4_EXTENT_SIZE: usize = 12;
-    pub const EXT4_EXTENT_INDEX_SIZE: usize = 12;
-    pub const MAX_EXTENT_INDEX_COUNT: usize = 340;
 
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, first_block) = le_u32(input)?;
-        let (input, block_count) = le_u16(input)?;
-        let (input, start_hi) = le_u16(input)?;
-        let (input, start_lo) = le_u32(input)?;
-
-        Ok((
-            input,
-            Extent {
-                first_block,
-                block_count,
-                start_hi,
-                start_lo,
-            },
-        ))
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        match Parse::parse(bytes).finish() {
+            Ok((_, descriptor)) => Ok(descriptor),
+            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+        }
     }
 
     pub fn start_block(&self) -> u64 {
@@ -107,12 +78,12 @@ impl Extent {
     }
 
     pub fn is_unwritten(&self) -> bool {
-        self.block_count > Self::EXT_INIT_MAX_LEN
+        self.block_count > Self::INIT_MAX_LEN
     }
 
     pub fn get_actual_len(&self) -> u16 {
         if self.is_unwritten() {
-            self.block_count - Self::EXT_INIT_MAX_LEN
+            self.block_count - Self::INIT_MAX_LEN
         } else {
             self.block_count
         }

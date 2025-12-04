@@ -323,12 +323,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
             ((block_data[2] >> 24) & 0xFF) as u8,
         ];
 
-        let (_, header) = ExtentHeader::parse(&header_bytes)
-            .map_err(|e| Ext4Error::Parse(format!("Failed to parse extent header: {:?}", e)))?;
-
-        if header.magic != Extent::EXT4_EXTENT_MAGIC {
-            return Err(Ext4Error::InvalidExtent);
-        }
+        let header = ExtentHeader::parse(&header_bytes)?;
 
         let mut extents = Vec::new();
 
@@ -336,8 +331,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
             let mut offset = 12;
             for _ in 0..header.entries_count {
                 let extent_bytes = self.u32_array_to_bytes(block_data, offset, 12);
-                let (_, extent) = Extent::parse(&extent_bytes)
-                    .map_err(|e| Ext4Error::Parse(format!("Failed to parse extent: {:?}", e)))?;
+                let extent = Extent::parse(&extent_bytes)?;
                 extents.push(extent);
                 offset += 12;
             }
@@ -345,9 +339,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
             let mut offset = 12;
             for _ in 0..header.entries_count {
                 let index_bytes = self.u32_array_to_bytes(block_data, offset, 12);
-                let (_, index) = ExtentIndex::parse(&index_bytes).map_err(|e| {
-                    Ext4Error::Parse(format!("Failed to parse extent index: {:?}", e))
-                })?;
+                let index = ExtentIndex::parse(&index_bytes)?;
 
                 let leaf_block = index.leaf_block();
                 let block_data = self.read_block(leaf_block)?;
@@ -363,30 +355,21 @@ impl<R: Read + Seek> Ext4Reader<R> {
     }
 
     fn parse_extent_tree_from_block(&mut self, block_data: &[u8]) -> Result<Vec<Extent>> {
-        let (_, header) = ExtentHeader::parse(&block_data[..12])
-            .map_err(|e| Ext4Error::Parse(format!("Failed to parse extent header: {:?}", e)))?;
-
-        if header.magic != Extent::EXT4_EXTENT_MAGIC {
-            return Err(Ext4Error::InvalidExtent);
-        }
+        let header = ExtentHeader::parse(&block_data[..12])?;
 
         let mut extents = Vec::new();
 
         if header.depth == 0 {
             let mut offset = 12;
             for _ in 0..header.entries_count {
-                let (_, extent) = Extent::parse(&block_data[offset..offset + 12])
-                    .map_err(|e| Ext4Error::Parse(format!("Failed to parse extent: {:?}", e)))?;
+                let extent = Extent::parse(&block_data[offset..offset + 12])?;
                 extents.push(extent);
                 offset += 12;
             }
         } else {
             let mut offset = 12;
             for _ in 0..header.entries_count {
-                let (_, index) =
-                    ExtentIndex::parse(&block_data[offset..offset + 12]).map_err(|e| {
-                        Ext4Error::Parse(format!("Failed to parse extent index: {:?}", e))
-                    })?;
+                let index = ExtentIndex::parse(&block_data[offset..offset + 12])?;
 
                 let leaf_block = index.leaf_block();
                 let child_block_data = self.read_block(leaf_block)?;
