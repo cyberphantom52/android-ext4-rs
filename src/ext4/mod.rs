@@ -1,14 +1,19 @@
 mod block;
+mod directory;
 mod extent;
+mod file;
 mod inode;
-mod reader;
 mod superblock;
+mod volume;
+mod walker;
 
 pub use block::BlockGroupDescriptor;
 pub use extent::{Extent, ExtentHeader, ExtentIndex};
+pub use file::File;
 pub use inode::{Inode, Linux2};
-pub use reader::Ext4Reader;
 pub use superblock::Superblock;
+pub use volume::Volume;
+pub use walker::{DirectoryWalker, WalkItem};
 
 use thiserror::Error;
 

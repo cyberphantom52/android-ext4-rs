@@ -1,20 +1,27 @@
-use std::io::{Read, Seek, SeekFrom};
+use std::{
+    io::{Read, Seek, SeekFrom},
+    path::Path,
+};
 
 use crate::ext4::{
     DirectoryEntry, Ext4Error, Result,
     block::BlockGroupDescriptor,
+    directory::Directory,
     extent::{Extent, ExtentHeader, ExtentIndex},
+    file::File,
     inode::Inode,
     superblock::Superblock,
 };
 
-pub struct Ext4Reader<R: Read + Seek> {
+/// Represents an ext4 filesystem volume
+pub struct Volume<R: Read + Seek> {
     reader: R,
     superblock: Superblock,
     block_size: u32,
 }
 
-impl<R: Read + Seek> Ext4Reader<R> {
+impl<R: Read + Seek> Volume<R> {
+    /// Create a new Volume from a reader
     pub fn new(mut reader: R) -> Result<Self> {
         reader.seek(SeekFrom::Start(Superblock::SUPERBLOCK_OFFSET))?;
 
@@ -22,7 +29,6 @@ impl<R: Read + Seek> Ext4Reader<R> {
         reader.read_exact(&mut sb_buf)?;
 
         let superblock = Superblock::parse(&sb_buf)?;
-
         let block_size = superblock.block_size();
 
         Ok(Self {
@@ -32,24 +38,17 @@ impl<R: Read + Seek> Ext4Reader<R> {
         })
     }
 
+    /// Get the superblock
     pub fn superblock(&self) -> &Superblock {
         &self.superblock
     }
 
+    /// Get the block size
     pub fn block_size(&self) -> u32 {
         self.block_size
     }
 
-    pub fn read_block(&mut self, block_num: u64) -> Result<Vec<u8>> {
-        let offset = block_num * self.block_size as u64;
-        self.reader.seek(SeekFrom::Start(offset))?;
-
-        let mut buffer = vec![0u8; self.block_size as usize];
-        self.reader.read_exact(&mut buffer)?;
-
-        Ok(buffer)
-    }
-
+    /// Read a block group descriptor
     pub fn read_block_group_descriptor(&mut self, bg_index: u32) -> Result<BlockGroupDescriptor> {
         if bg_index >= self.superblock.block_group_count() {
             return Err(Ext4Error::InvalidBlockGroup(bg_index));
@@ -67,6 +66,18 @@ impl<R: Read + Seek> Ext4Reader<R> {
         BlockGroupDescriptor::parse(&buffer)
     }
 
+    /// Read a block from the filesystem
+    pub fn read_block(&mut self, block_num: u64) -> Result<Vec<u8>> {
+        let offset = block_num * self.block_size as u64;
+        self.reader.seek(SeekFrom::Start(offset))?;
+
+        let mut buffer = vec![0u8; self.block_size as usize];
+        self.reader.read_exact(&mut buffer)?;
+
+        Ok(buffer)
+    }
+
+    /// Read an inode from the filesystem
     pub fn read_inode(&mut self, inode_num: u32) -> Result<Inode> {
         if inode_num == 0 {
             return Err(Ext4Error::InvalidInode(inode_num));
@@ -78,8 +89,9 @@ impl<R: Read + Seek> Ext4Reader<R> {
         let bg_index = (inode_num - 1) / inodes_per_group;
         let inode_index = (inode_num - 1) % inodes_per_group;
 
-        let bg_desc = self.read_block_group_descriptor(bg_index)?;
-        let inode_table_block = bg_desc.inode_table_first_block();
+        let inode_table_block = self
+            .read_block_group_descriptor(bg_index)
+            .map(|bg_desc| bg_desc.inode_table_first_block())?;
 
         let offset = inode_table_block * self.block_size as u64 + inode_index as u64 * inode_size;
 
@@ -88,12 +100,65 @@ impl<R: Read + Seek> Ext4Reader<R> {
         let mut buffer = vec![0u8; inode_size as usize];
         self.reader.read_exact(&mut buffer)?;
 
-        let inode = Inode::parse(&buffer)?;
-
-        Ok(inode)
+        Inode::parse(&buffer)
     }
 
-    pub fn read_inode_data(
+    /// Lookup a path and return its inode
+    pub fn lookup_path(&mut self, path: impl AsRef<Path>) -> Result<Inode> {
+        // Get components iterator
+        let mut components = path.as_ref().components().peekable();
+
+        // Skip root component if present
+        if let Some(std::path::Component::RootDir) = components.peek() {
+            components.next();
+        }
+
+        // If no components left, return root inode
+        if components.peek().is_none() {
+            return self.read_inode(Inode::ROOT_INODE);
+        }
+
+        let mut current_inode = self.read_inode(Inode::ROOT_INODE)?;
+
+        for component in components {
+            // Only process normal components
+            if let std::path::Component::Normal(os_str) = component {
+                if !current_inode.is_directory() {
+                    return Err(Ext4Error::NotADirectory);
+                }
+
+                let component_str = os_str
+                    .to_str()
+                    .ok_or_else(|| Ext4Error::FileNotFound("Invalid UTF-8 in path".to_string()))?;
+
+                match self.find_entry_in_directory(&current_inode, component_str)? {
+                    Some(entry) => {
+                        current_inode = self.read_inode(entry.inode)?;
+                    }
+                    None => {
+                        return Err(Ext4Error::FileNotFound(component_str.to_string()));
+                    }
+                }
+            }
+        }
+
+        Ok(current_inode)
+    }
+
+    /// Open a file for reading
+    pub fn open_file<'a>(&'a mut self, path: impl AsRef<Path>) -> Result<File<'a, R>> {
+        let inode = self.lookup_path(path)?;
+        File::new(self, inode)
+    }
+
+    /// Open a directory for listing
+    pub fn open_dir<'a>(&'a mut self, path: impl AsRef<Path>) -> Result<Directory<'a, R>> {
+        let inode = self.lookup_path(path)?;
+        Directory::new(self, inode)
+    }
+
+    /// Read inode data at a given offset
+    pub(crate) fn read_inode_data(
         &mut self,
         inode: &Inode,
         offset: u64,
@@ -192,15 +257,18 @@ impl<R: Read + Seek> Ext4Reader<R> {
         Ok(result)
     }
 
+    /// Get block address from inode (handles indirect blocks)
     fn get_block_from_inode(&mut self, inode: &Inode, logical_block: u32) -> Result<u64> {
         let addr_per_block = self.block_size / 4;
 
+        // Direct blocks
         if logical_block < 12 {
             return Ok(inode.block[logical_block as usize] as u64);
         }
 
         let mut block_idx = logical_block - 12;
 
+        // Single indirect
         if block_idx < addr_per_block {
             let indirect_block = inode.block[12] as u64;
             if indirect_block == 0 {
@@ -219,6 +287,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
 
         block_idx -= addr_per_block;
 
+        // Double indirect
         if block_idx < addr_per_block * addr_per_block {
             let double_indirect = inode.block[13] as u64;
             if double_indirect == 0 {
@@ -254,6 +323,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
 
         block_idx -= addr_per_block * addr_per_block;
 
+        // Triple indirect
         let triple_indirect = inode.block[14] as u64;
         if triple_indirect == 0 {
             return Ok(0);
@@ -301,6 +371,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
         Ok(addr as u64)
     }
 
+    /// Parse extent tree from inode block data
     fn parse_extent_tree(&mut self, block_data: &[u32; 15]) -> Result<Vec<Extent>> {
         let header_bytes: [u8; 12] = [
             (block_data[0] & 0xFF) as u8,
@@ -318,10 +389,10 @@ impl<R: Read + Seek> Ext4Reader<R> {
         ];
 
         let header = ExtentHeader::parse(&header_bytes)?;
-
         let mut extents = Vec::new();
 
         if header.depth == 0 {
+            // Leaf node - contains extents
             let mut offset = 12;
             for _ in 0..header.entries_count {
                 let extent_bytes = self.u32_array_to_bytes(block_data, offset, 12);
@@ -330,6 +401,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
                 offset += 12;
             }
         } else {
+            // Internal node - contains extent indices
             let mut offset = 12;
             for _ in 0..header.entries_count {
                 let index_bytes = self.u32_array_to_bytes(block_data, offset, 12);
@@ -348,12 +420,13 @@ impl<R: Read + Seek> Ext4Reader<R> {
         Ok(extents)
     }
 
+    /// Parse extent tree from a block
     fn parse_extent_tree_from_block(&mut self, block_data: &[u8]) -> Result<Vec<Extent>> {
         let header = ExtentHeader::parse(&block_data[..12])?;
-
         let mut extents = Vec::new();
 
         if header.depth == 0 {
+            // Leaf node
             let mut offset = 12;
             for _ in 0..header.entries_count {
                 let extent = Extent::parse(&block_data[offset..offset + 12])?;
@@ -361,6 +434,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
                 offset += 12;
             }
         } else {
+            // Internal node
             let mut offset = 12;
             for _ in 0..header.entries_count {
                 let index = ExtentIndex::parse(&block_data[offset..offset + 12])?;
@@ -378,6 +452,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
         Ok(extents)
     }
 
+    /// Helper to convert u32 array to bytes
     fn u32_array_to_bytes(&self, data: &[u32; 15], offset: usize, length: usize) -> Vec<u8> {
         let mut result = Vec::with_capacity(length);
         let start_idx = offset / 4;
@@ -396,7 +471,8 @@ impl<R: Read + Seek> Ext4Reader<R> {
         result[start_byte..start_byte + length].to_vec()
     }
 
-    pub fn read_directory(&mut self, inode: &Inode) -> Result<Vec<DirectoryEntry>> {
+    /// Read all directory entries from an inode
+    pub(crate) fn read_directory_entries(&mut self, inode: &Inode) -> Result<Vec<DirectoryEntry>> {
         if !inode.is_directory() {
             return Err(Ext4Error::NotADirectory);
         }
@@ -412,12 +488,11 @@ impl<R: Read + Seek> Ext4Reader<R> {
                 break;
             }
 
-            let inode_num = u32::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ]);
+            let inode_num = u32::from_le_bytes(
+                data[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| Ext4Error::ReadBeyondEof)?,
+            );
 
             let entry_len = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
 
@@ -451,12 +526,13 @@ impl<R: Read + Seek> Ext4Reader<R> {
         Ok(entries)
     }
 
-    pub fn find_entry_in_directory(
+    /// Find an entry in a directory by name
+    pub(crate) fn find_entry_in_directory(
         &mut self,
         dir_inode: &Inode,
         name: &str,
     ) -> Result<Option<DirectoryEntry>> {
-        let entries = self.read_directory(dir_inode)?;
+        let entries = self.read_directory_entries(dir_inode)?;
 
         for entry in entries {
             if entry.name_str() == name {
@@ -467,59 +543,7 @@ impl<R: Read + Seek> Ext4Reader<R> {
         Ok(None)
     }
 
-    pub fn lookup_path(&mut self, path: &str) -> Result<Inode> {
-        let path = path.trim_start_matches('/');
-
-        if path.is_empty() {
-            return self.read_inode(Inode::ROOT_INODE);
-        }
-
-        let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-
-        let mut current_inode = self.read_inode(Inode::ROOT_INODE)?;
-
-        for component in components {
-            if !current_inode.is_directory() {
-                return Err(Ext4Error::NotADirectory);
-            }
-
-            match self.find_entry_in_directory(&current_inode, component)? {
-                Some(entry) => {
-                    current_inode = self.read_inode(entry.inode)?;
-                }
-                None => {
-                    return Err(Ext4Error::FileNotFound(component.to_string()));
-                }
-            }
-        }
-
-        Ok(current_inode)
-    }
-
-    pub fn read_file(&mut self, path: &str) -> Result<Vec<u8>> {
-        let inode = self.lookup_path(path)?;
-
-        if !inode.is_regular_file() {
-            return Err(Ext4Error::InvalidPath(format!(
-                "{} is not a regular file",
-                path
-            )));
-        }
-
-        let file_size = self.superblock.inode_size_file(&inode);
-        self.read_inode_data(&inode, 0, file_size as usize)
-    }
-
-    pub fn list_directory(&mut self, path: &str) -> Result<Vec<DirectoryEntry>> {
-        let inode = self.lookup_path(path)?;
-
-        if !inode.is_directory() {
-            return Err(Ext4Error::NotADirectory);
-        }
-
-        self.read_directory(&inode)
-    }
-
+    /// Read a symbolic link target
     pub fn read_symlink(&mut self, inode: &Inode) -> Result<String> {
         if !inode.is_symlink() {
             return Err(Ext4Error::InvalidPath("Not a symlink".to_string()));
@@ -528,37 +552,15 @@ impl<R: Read + Seek> Ext4Reader<R> {
         let file_size = self.superblock.inode_size_file(inode);
 
         if file_size < 60 {
+            // Fast symlink - stored in inode
             let link_data = unsafe {
                 std::slice::from_raw_parts(inode.block.as_ptr() as *const u8, file_size as usize)
             };
             Ok(String::from_utf8_lossy(link_data).to_string())
         } else {
+            // Slow symlink - stored in blocks
             let data = self.read_inode_data(inode, 0, file_size as usize)?;
             Ok(String::from_utf8_lossy(&data).to_string())
         }
-    }
-
-    pub fn file_size(&mut self, path: &str) -> Result<u64> {
-        let inode = self.lookup_path(path)?;
-        Ok(self.superblock.inode_size_file(&inode))
-    }
-
-    pub fn exists(&mut self, path: &str) -> bool {
-        self.lookup_path(path).is_ok()
-    }
-
-    pub fn is_directory(&mut self, path: &str) -> Result<bool> {
-        let inode = self.lookup_path(path)?;
-        Ok(inode.is_directory())
-    }
-
-    pub fn is_file(&mut self, path: &str) -> Result<bool> {
-        let inode = self.lookup_path(path)?;
-        Ok(inode.is_regular_file())
-    }
-
-    pub fn is_symlink(&mut self, path: &str) -> Result<bool> {
-        let inode = self.lookup_path(path)?;
-        Ok(inode.is_symlink())
     }
 }

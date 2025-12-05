@@ -171,10 +171,9 @@ impl Superblock {
     }
 
     pub fn block_group_count(&self) -> u32 {
-        let blocks_count = (self.blocks_count_hi as u64) << 32 | self.blocks_count_lo as u64;
         let blocks_per_group = self.blocks_per_group as u64;
-        let mut block_group_count = blocks_count / blocks_per_group;
-        if !blocks_count.is_multiple_of(blocks_per_group) {
+        let mut block_group_count = self.blocks_count() / blocks_per_group;
+        if !self.blocks_count().is_multiple_of(blocks_per_group) {
             block_group_count += 1;
         }
         block_group_count as u32
