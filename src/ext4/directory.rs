@@ -7,7 +7,7 @@ use crate::{
 
 /// Represents a directory in the ext4 filesystem
 pub struct Directory<'a, R: Read + Seek> {
-    pub volume: &'a mut Volume<R>,
+    pub(crate) volume: &'a mut Volume<R>,
     inode: Inode,
     entries: Vec<DirectoryEntry>,
 }
@@ -48,33 +48,11 @@ impl<'a, R: Read + Seek> Directory<'a, R> {
     }
 }
 
-pub struct DirectoryIterator<'a, R: Read + Seek> {
-    directory: Directory<'a, R>,
-    index: usize,
-}
-
 impl<'a, R: Read + Seek> IntoIterator for Directory<'a, R> {
     type Item = DirectoryEntry;
-    type IntoIter = DirectoryIterator<'a, R>;
+    type IntoIter = std::vec::IntoIter<DirectoryEntry>;
 
     fn into_iter(self) -> Self::IntoIter {
-        DirectoryIterator {
-            directory: self,
-            index: 0,
-        }
-    }
-}
-
-impl<'a, R: Read + Seek> Iterator for DirectoryIterator<'a, R> {
-    type Item = DirectoryEntry;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.directory.entries().get(self.index) {
-            Some(&entry) => {
-                self.index += 1;
-                Some(entry)
-            }
-            None => None,
-        }
+        self.entries.into_iter()
     }
 }

@@ -58,10 +58,6 @@ impl<'a, R: Read + Seek> Read for File<'a, R> {
 
         let to_read = std::cmp::min(buf.len(), (self.size - self.position) as usize);
 
-        if to_read == 0 {
-            return Ok(0);
-        }
-
         let data = self
             .volume
             .read_inode_data(&self.inode, self.position, to_read)

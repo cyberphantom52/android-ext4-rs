@@ -124,18 +124,15 @@ impl<R: Read + Seek> Volume<R> {
         let mut current_inode = self.read_inode(Inode::ROOT_INODE)?;
 
         for component in components {
-            match Directory::new(self, current_inode) {
-                Ok(directory) => {
-                    let component_str = component.as_os_str().to_str().ok_or_else(|| {
-                        Ext4Error::FileNotFound("Invalid UTF-8 in path".to_string())
-                    })?;
+            let directory = Directory::new(self, current_inode)?;
+            let component_str = component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| Ext4Error::FileNotFound("Invalid UTF-8 in path".to_string()))?;
 
-                    current_inode = match directory.find(component_str) {
-                        Some(&entry) => self.read_inode(entry.inode)?,
-                        None => return Err(Ext4Error::FileNotFound(component_str.to_string())),
-                    };
-                }
-                Err(e) => return Err(e),
+            current_inode = match directory.find(component_str) {
+                Some(&entry) => self.read_inode(entry.inode)?,
+                None => return Err(Ext4Error::FileNotFound(component_str.to_string())),
             };
         }
 
