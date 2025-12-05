@@ -365,104 +365,32 @@ impl<R: Read + Seek> Volume<R> {
         Ok(addr as u64)
     }
 
-    /// Parse extent tree from inode block data
     fn parse_extent_tree(&mut self, block_data: &[u32; 15]) -> Result<Vec<Extent>> {
-        let header_bytes: [u8; 12] = [
-            (block_data[0] & 0xFF) as u8,
-            ((block_data[0] >> 8) & 0xFF) as u8,
-            ((block_data[0] >> 16) & 0xFF) as u8,
-            ((block_data[0] >> 24) & 0xFF) as u8,
-            (block_data[1] & 0xFF) as u8,
-            ((block_data[1] >> 8) & 0xFF) as u8,
-            ((block_data[1] >> 16) & 0xFF) as u8,
-            ((block_data[1] >> 24) & 0xFF) as u8,
-            (block_data[2] & 0xFF) as u8,
-            ((block_data[2] >> 8) & 0xFF) as u8,
-            ((block_data[2] >> 16) & 0xFF) as u8,
-            ((block_data[2] >> 24) & 0xFF) as u8,
-        ];
+        let bytes: Vec<u8> = block_data
+            .iter()
+            .flat_map(|&word| word.to_le_bytes())
+            .collect();
 
-        let header = ExtentHeader::parse(&header_bytes)?;
-        let mut extents = Vec::new();
-
-        if header.depth == 0 {
-            // Leaf node - contains extents
-            let mut offset = 12;
-            for _ in 0..header.entries_count {
-                let extent_bytes = self.u32_array_to_bytes(block_data, offset, 12);
-                let extent = Extent::parse(&extent_bytes)?;
-                extents.push(extent);
-                offset += 12;
-            }
-        } else {
-            // Internal node - contains extent indices
-            let mut offset = 12;
-            for _ in 0..header.entries_count {
-                let index_bytes = self.u32_array_to_bytes(block_data, offset, 12);
-                let index = ExtentIndex::parse(&index_bytes)?;
-
-                let leaf_block = index.leaf_block();
-                let block_data = self.read_block(leaf_block)?;
-
-                let child_extents = self.parse_extent_tree_from_block(&block_data)?;
-                extents.extend(child_extents);
-
-                offset += 12;
-            }
-        }
-
-        Ok(extents)
+        self.parse_extent_tree_from_block(&bytes)
     }
 
-    /// Parse extent tree from a block
     fn parse_extent_tree_from_block(&mut self, block_data: &[u8]) -> Result<Vec<Extent>> {
         let header = ExtentHeader::parse(&block_data[..12])?;
         let mut extents = Vec::new();
+        let mut offset = 12;
 
-        if header.depth == 0 {
-            // Leaf node
-            let mut offset = 12;
-            for _ in 0..header.entries_count {
-                let extent = Extent::parse(&block_data[offset..offset + 12])?;
-                extents.push(extent);
-                offset += 12;
-            }
-        } else {
-            // Internal node
-            let mut offset = 12;
-            for _ in 0..header.entries_count {
+        for _ in 0..header.entries_count {
+            if header.depth == 0 {
+                extents.push(Extent::parse(&block_data[offset..offset + 12])?);
+            } else {
                 let index = ExtentIndex::parse(&block_data[offset..offset + 12])?;
-
-                let leaf_block = index.leaf_block();
-                let child_block_data = self.read_block(leaf_block)?;
-
-                let child_extents = self.parse_extent_tree_from_block(&child_block_data)?;
-                extents.extend(child_extents);
-
-                offset += 12;
+                let child_block_data = self.read_block(index.leaf_block())?;
+                extents.extend(self.parse_extent_tree_from_block(&child_block_data)?);
             }
+            offset += 12;
         }
 
         Ok(extents)
-    }
-
-    /// Helper to convert u32 array to bytes
-    fn u32_array_to_bytes(&self, data: &[u32; 15], offset: usize, length: usize) -> Vec<u8> {
-        let mut result = Vec::with_capacity(length);
-        let start_idx = offset / 4;
-        let start_byte = offset % 4;
-
-        for i in 0..length.div_ceil(4) {
-            if start_idx + i < 15 {
-                let val = data[start_idx + i];
-                result.push((val & 0xFF) as u8);
-                result.push(((val >> 8) & 0xFF) as u8);
-                result.push(((val >> 16) & 0xFF) as u8);
-                result.push(((val >> 24) & 0xFF) as u8);
-            }
-        }
-
-        result[start_byte..start_byte + length].to_vec()
     }
 
     /// Read all directory entries from an inode
