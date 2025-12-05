@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     ext4::{
-        DirectoryEntry, Ext4Error, Result,
+        ADDR_SIZE, DirectoryEntry, Ext4Error, Result,
         block::BlockGroupDescriptor,
         directory::Directory,
         extent::{Extent, ExtentHeader, ExtentIndex},
@@ -24,11 +24,13 @@ pub struct Volume<R: Read + Seek> {
 }
 
 impl<R: Read + Seek> Volume<R> {
+    pub const MIN_BLOCK_SIZE: u32 = 1024;
+
     /// Create a new Volume from a reader
     pub fn new(mut reader: R) -> Result<Self> {
         reader.seek(SeekFrom::Start(Superblock::SUPERBLOCK_OFFSET))?;
 
-        let mut sb_buf = vec![0u8; 1024];
+        let mut sb_buf = vec![0u8; Superblock::SIZE];
         reader.read_exact(&mut sb_buf)?;
 
         let superblock = Superblock::parse(&sb_buf)?;
@@ -58,7 +60,11 @@ impl<R: Read + Seek> Volume<R> {
         }
 
         let desc_size = self.superblock.descriptor_size() as u64;
-        let first_block = if self.block_size == 1024 { 2 } else { 1 };
+        let first_block = if self.block_size == Self::MIN_BLOCK_SIZE {
+            2
+        } else {
+            1
+        };
         let offset = first_block * self.block_size as u64 + bg_index as u64 * desc_size;
 
         self.reader.seek(SeekFrom::Start(offset))?;
@@ -247,7 +253,7 @@ impl<R: Read + Seek> Volume<R> {
             return Ok(0);
         }
         let block_data = self.read_block(block_num)?;
-        let offset = (index * 4) as usize;
+        let offset = (index * ADDR_SIZE) as usize;
         Ok(u32::from_le_bytes(block_data[offset..offset + 4].try_into().unwrap()) as u64)
     }
 
@@ -255,28 +261,30 @@ impl<R: Read + Seek> Volume<R> {
     fn resolve_block(&mut self, inode: &Inode, logical_block: u32) -> Result<u64> {
         let addr_per_block = self.block_size / 4;
 
-        if logical_block < 12 {
+        if logical_block < Inode::DIRECT_BLOCKS {
             return Ok(inode.block[logical_block as usize] as u64);
         }
 
-        let mut block_idx = logical_block - 12;
+        let mut block_idx = logical_block - Inode::DIRECT_BLOCKS;
 
         if block_idx < addr_per_block {
-            return self.read_block_addr(inode.block[12] as u64, block_idx);
+            return self.read_block_addr(inode.block[Inode::INDIRECT_BLOCK_IDX] as u64, block_idx);
         }
 
         block_idx -= addr_per_block;
 
         if block_idx < addr_per_block * addr_per_block {
-            let indirect =
-                self.read_block_addr(inode.block[13] as u64, block_idx / addr_per_block)?;
+            let indirect = self.read_block_addr(
+                inode.block[Inode::DOUBLE_INDIRECT_BLOCK_IDX] as u64,
+                block_idx / addr_per_block,
+            )?;
             return self.read_block_addr(indirect, block_idx % addr_per_block);
         }
 
         block_idx -= addr_per_block * addr_per_block;
 
         let double = self.read_block_addr(
-            inode.block[14] as u64,
+            inode.block[Inode::TRIPLE_INDIRECT_BLOCK_IDX] as u64,
             block_idx / (addr_per_block * addr_per_block),
         )?;
         let indirect =
@@ -294,19 +302,19 @@ impl<R: Read + Seek> Volume<R> {
     }
 
     fn parse_extent_tree_from_block(&mut self, block_data: &[u8]) -> Result<Vec<Extent>> {
-        let header = ExtentHeader::parse(&block_data[..12])?;
+        let header = ExtentHeader::parse(&block_data[..ExtentHeader::SIZE])?;
         let mut extents = Vec::new();
-        let mut offset = 12;
+        let mut offset = ExtentHeader::SIZE;
 
         for _ in 0..header.entries_count {
             if header.depth == 0 {
-                extents.push(Extent::parse(&block_data[offset..offset + 12])?);
+                extents.push(Extent::parse(&block_data[offset..offset + Extent::SIZE])?);
             } else {
-                let index = ExtentIndex::parse(&block_data[offset..offset + 12])?;
+                let index = ExtentIndex::parse(&block_data[offset..offset + ExtentIndex::SIZE])?;
                 let child_block_data = self.read_block(index.leaf_block())?;
                 extents.extend(self.parse_extent_tree_from_block(&child_block_data)?);
             }
-            offset += 12;
+            offset += Extent::SIZE;
         }
 
         Ok(extents)
@@ -325,7 +333,7 @@ impl<R: Read + Seek> Volume<R> {
         let mut offset = 0;
 
         while offset < data.len() {
-            if offset + 8 > data.len() {
+            if offset + DirectoryEntry::HEADER_SIZE > data.len() {
                 break;
             }
 
@@ -345,11 +353,13 @@ impl<R: Read + Seek> Volume<R> {
                 let name_len = data[offset + 6];
                 let inode_type = data[offset + 7];
 
-                let mut name = [0u8; 255];
-                let actual_name_len = std::cmp::min(name_len as usize, 255);
-                if offset + 8 + actual_name_len <= data.len() {
-                    name[..actual_name_len]
-                        .copy_from_slice(&data[offset + 8..offset + 8 + actual_name_len]);
+                let mut name = [0u8; DirectoryEntry::MAX_NAME_LEN];
+                let actual_name_len = DirectoryEntry::MAX_NAME_LEN.min(name_len as usize);
+                if offset + DirectoryEntry::HEADER_SIZE + actual_name_len <= data.len() {
+                    name[..actual_name_len].copy_from_slice(
+                        &data[offset + DirectoryEntry::HEADER_SIZE
+                            ..offset + DirectoryEntry::HEADER_SIZE + actual_name_len],
+                    );
                 }
 
                 entries.push(DirectoryEntry {
@@ -375,7 +385,7 @@ impl<R: Read + Seek> Volume<R> {
 
         let file_size = self.superblock.inode_size_file(inode);
 
-        if file_size < 60 {
+        if file_size < Inode::FAST_SYMLINK_MAX_SIZE {
             // Fast symlink - stored in inode
             let link_data: Vec<u8> = inode
                 .block

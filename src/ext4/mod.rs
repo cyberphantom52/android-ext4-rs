@@ -17,48 +17,9 @@ pub use walker::{DirectoryWalker, WalkItem};
 
 use thiserror::Error;
 
-pub const BLOCK_SIZE: usize = 0x1000;
-pub const SECTORS_PER_BLOCK: usize = BLOCK_SIZE / 512;
-
 pub type Ext4Lblk = u32;
 pub type Ext4Fsblk = u64;
-
-pub const EXT4_MAX_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024;
-
-pub const O_ACCMODE: i32 = 0o0003;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum OpenFlags {
-    ReadOnly = 0,
-    WriteOnly = 1,
-    ReadWrite = 2,
-    Create = 0o100,
-    Exclusive = 0o200,
-    NoCTTY = 0o400,
-    Truncate = 0o1000,
-    Append = 0o2000,
-    NonBlocking = 0o4000,
-    Sync = 0o4010000,
-    Async = 0o20000,
-    LargeFile = 0o100000,
-    Directory = 0o200000,
-    NoFollow = 0o400000,
-    CloExec = 0o2000000,
-    Direct = 0o40000,
-    NoAtime = 0o1000000,
-    Path = 0o10000000,
-    DSync = 0o10000,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum AccessMode {
-    Exist = 0b000,
-    Execute = 0b001,
-    Write = 0b010,
-    Read = 0b100,
-}
+pub const ADDR_SIZE: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -73,8 +34,8 @@ pub enum DirEntryType {
     Symlink = 7,
 }
 
-impl DirEntryType {
-    pub fn from_u8(value: u8) -> Self {
+impl From<u8> for DirEntryType {
+    fn from(value: u8) -> Self {
         match value {
             0 => Self::Unknown,
             1 => Self::RegFile,
@@ -100,13 +61,15 @@ pub struct DirectoryEntry {
 }
 
 impl DirectoryEntry {
+    pub const HEADER_SIZE: usize = 8;
+    pub const MAX_NAME_LEN: usize = 255;
     pub fn name_str(&self) -> &str {
         let len = self.name_len as usize;
         std::str::from_utf8(&self.name[..len]).unwrap_or("")
     }
 
     pub fn entry_type(&self) -> DirEntryType {
-        DirEntryType::from_u8(self.inode_type)
+        DirEntryType::from(self.inode_type)
     }
 }
 

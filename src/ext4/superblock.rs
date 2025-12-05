@@ -147,6 +147,7 @@ pub struct Superblock {
 }
 
 impl Superblock {
+    pub const SIZE: usize = 1024;
     pub const SUPERBLOCK_OFFSET: u64 = 1024;
     pub const EXT4_SUPERBLOCK_OS_HURD: u32 = 1;
 

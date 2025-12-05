@@ -45,17 +45,22 @@ pub struct Inode {
 impl Inode {
     // Special inode numbers
     pub const ROOT_INODE: u32 = 2;
-    const JOURNAL_INODE: u32 = 8;
-    const UNDEL_DIR_INODE: u32 = 6;
-    const LOST_AND_FOUND_INODE: u32 = 11;
+    const _JOURNAL_INODE: u32 = 8;
+    const _UNDEL_DIR_INODE: u32 = 6;
+    const _LOST_AND_FOUND_INODE: u32 = 11;
 
     // Mode masks
     const MODE_PERM_MASK: u16 = 0x0FFF;
     const MODE_TYPE_MASK: u16 = 0xF000;
 
     // Other constants
-    const BLOCK_SIZE: usize = 512;
-    const GOOD_OLD_SIZE: u16 = 128;
+    const _BLOCK_SIZE: usize = 512;
+    const _GOOD_OLD_SIZE: u16 = 128;
+    pub const DIRECT_BLOCKS: u32 = 12;
+    pub const INDIRECT_BLOCK_IDX: usize = 12;
+    pub const DOUBLE_INDIRECT_BLOCK_IDX: usize = 13;
+    pub const TRIPLE_INDIRECT_BLOCK_IDX: usize = 14;
+    pub const FAST_SYMLINK_MAX_SIZE: u64 = 60;
 
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
