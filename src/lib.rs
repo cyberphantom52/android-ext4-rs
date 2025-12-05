@@ -1,4 +1,5 @@
 pub mod ext4;
+mod utils;
 
 pub use ext4::{
     AccessMode, BlockGroupDescriptor, DirEntryType, DirectoryEntry, DirectoryEntryTail,

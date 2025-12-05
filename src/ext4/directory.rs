@@ -42,6 +42,10 @@ impl<'a, R: Read + Seek> Directory<'a, R> {
     pub fn walk(self) -> DirectoryWalker<'a, R> {
         DirectoryWalker::new(self)
     }
+
+    pub fn find(&self, name: &str) -> Option<&DirectoryEntry> {
+        self.entries.iter().find(|entry| entry.name_str() == name)
+    }
 }
 
 pub struct DirectoryIterator<'a, R: Read + Seek> {

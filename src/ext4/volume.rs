@@ -3,14 +3,17 @@ use std::{
     path::Path,
 };
 
-use crate::ext4::{
-    DirectoryEntry, Ext4Error, Result,
-    block::BlockGroupDescriptor,
-    directory::Directory,
-    extent::{Extent, ExtentHeader, ExtentIndex},
-    file::File,
-    inode::Inode,
-    superblock::Superblock,
+use crate::{
+    ext4::{
+        DirectoryEntry, Ext4Error, Result,
+        block::BlockGroupDescriptor,
+        directory::Directory,
+        extent::{Extent, ExtentHeader, ExtentIndex},
+        file::File,
+        inode::Inode,
+        superblock::Superblock,
+    },
+    utils::NormalizePath,
 };
 
 /// Represents an ext4 filesystem volume
@@ -105,13 +108,13 @@ impl<R: Read + Seek> Volume<R> {
 
     /// Lookup a path and return its inode
     pub fn lookup_path(&mut self, path: impl AsRef<Path>) -> Result<Inode> {
-        // Get components iterator
-        let mut components = path.as_ref().components().peekable();
+        let path = path.as_ref().normalize()?;
 
-        // Skip root component if present
-        if let Some(std::path::Component::RootDir) = components.peek() {
-            components.next();
-        }
+        // Get components iterator
+        let mut components = path
+            .components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .peekable();
 
         // If no components left, return root inode
         if components.peek().is_none() {
@@ -121,25 +124,19 @@ impl<R: Read + Seek> Volume<R> {
         let mut current_inode = self.read_inode(Inode::ROOT_INODE)?;
 
         for component in components {
-            // Only process normal components
-            if let std::path::Component::Normal(os_str) = component {
-                if !current_inode.is_directory() {
-                    return Err(Ext4Error::NotADirectory);
-                }
+            match Directory::new(self, current_inode) {
+                Ok(directory) => {
+                    let component_str = component.as_os_str().to_str().ok_or_else(|| {
+                        Ext4Error::FileNotFound("Invalid UTF-8 in path".to_string())
+                    })?;
 
-                let component_str = os_str
-                    .to_str()
-                    .ok_or_else(|| Ext4Error::FileNotFound("Invalid UTF-8 in path".to_string()))?;
-
-                match self.find_entry_in_directory(&current_inode, component_str)? {
-                    Some(entry) => {
-                        current_inode = self.read_inode(entry.inode)?;
-                    }
-                    None => {
-                        return Err(Ext4Error::FileNotFound(component_str.to_string()));
-                    }
+                    current_inode = match directory.find(component_str) {
+                        Some(&entry) => self.read_inode(entry.inode)?,
+                        None => return Err(Ext4Error::FileNotFound(component_str.to_string())),
+                    };
                 }
-            }
+                Err(e) => return Err(e),
+            };
         }
 
         Ok(current_inode)
@@ -524,23 +521,6 @@ impl<R: Read + Seek> Volume<R> {
         }
 
         Ok(entries)
-    }
-
-    /// Find an entry in a directory by name
-    pub(crate) fn find_entry_in_directory(
-        &mut self,
-        dir_inode: &Inode,
-        name: &str,
-    ) -> Result<Option<DirectoryEntry>> {
-        let entries = self.read_directory_entries(dir_inode)?;
-
-        for entry in entries {
-            if entry.name_str() == name {
-                return Ok(Some(entry));
-            }
-        }
-
-        Ok(None)
     }
 
     /// Read a symbolic link target
