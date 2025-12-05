@@ -458,10 +458,13 @@ impl<R: Read + Seek> Volume<R> {
 
         if file_size < 60 {
             // Fast symlink - stored in inode
-            let link_data = unsafe {
-                std::slice::from_raw_parts(inode.block.as_ptr() as *const u8, file_size as usize)
-            };
-            Ok(String::from_utf8_lossy(link_data).to_string())
+            let link_data: Vec<u8> = inode
+                .block
+                .iter()
+                .flat_map(|&word| word.to_le_bytes())
+                .take(file_size as usize)
+                .collect();
+            Ok(String::from_utf8_lossy(&link_data).to_string())
         } else {
             // Slow symlink - stored in blocks
             let data = self.read_inode_data(inode, 0, file_size as usize)?;
