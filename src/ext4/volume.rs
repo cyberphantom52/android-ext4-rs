@@ -166,89 +166,80 @@ impl<R: Read + Seek> Volume<R> {
 
         let actual_length = std::cmp::min(length, (file_size - offset) as usize);
         let mut result = vec![0u8; actual_length];
-        let mut bytes_read = 0;
 
         if inode.uses_extents() {
-            let extents = self.parse_extent_tree(&inode.block)?;
-
-            for extent in extents {
-                let extent_start = extent.first_block as u64 * self.block_size as u64;
-                let extent_end =
-                    extent_start + extent.get_actual_len() as u64 * self.block_size as u64;
-
-                if offset < extent_end && offset + actual_length as u64 > extent_start {
-                    let read_start = offset.saturating_sub(extent_start);
-
-                    let read_end = std::cmp::min(
-                        extent_end - extent_start,
-                        offset + actual_length as u64 - extent_start,
-                    );
-
-                    let physical_block = extent.start_block();
-                    let physical_offset = physical_block * self.block_size as u64 + read_start;
-
-                    self.reader.seek(SeekFrom::Start(physical_offset))?;
-
-                    let to_read = (read_end - read_start) as usize;
-                    self.reader
-                        .read_exact(&mut result[bytes_read..bytes_read + to_read])?;
-                    bytes_read += to_read;
-
-                    if bytes_read >= actual_length {
-                        break;
-                    }
-                }
-            }
+            self.read_via_extents(inode, offset, &mut result)?;
         } else {
-            let start_block = (offset / self.block_size as u64) as usize;
-            let end_block =
-                ((offset + actual_length as u64).div_ceil(self.block_size as u64)) as usize;
-
-            for block_idx in start_block..end_block {
-                let physical_block = self.resolve_block(inode, block_idx as u32)?;
-
-                if physical_block == 0 {
-                    let block_offset = if block_idx == start_block {
-                        (offset % self.block_size as u64) as usize
-                    } else {
-                        0
-                    };
-
-                    let to_read = std::cmp::min(
-                        self.block_size as usize - block_offset,
-                        actual_length - bytes_read,
-                    );
-
-                    result[bytes_read..bytes_read + to_read].fill(0);
-                    bytes_read += to_read;
-                } else {
-                    let block_offset = if block_idx == start_block {
-                        (offset % self.block_size as u64) as usize
-                    } else {
-                        0
-                    };
-
-                    let physical_offset =
-                        physical_block * self.block_size as u64 + block_offset as u64;
-                    self.reader.seek(SeekFrom::Start(physical_offset))?;
-
-                    let to_read = std::cmp::min(
-                        self.block_size as usize - block_offset,
-                        actual_length - bytes_read,
-                    );
-
-                    self.reader
-                        .read_exact(&mut result[bytes_read..bytes_read + to_read])?;
-                    bytes_read += to_read;
-                }
-
-                if bytes_read >= actual_length {
-                    break;
-                }
-            }
+            self.read_via_indirect(inode, offset, &mut result)?;
         }
 
         Ok(result)
+    }
+
+    fn read_via_extents(&mut self, inode: &Inode, offset: u64, buf: &mut [u8]) -> Result<()> {
+        let extents = self.parse_extent_tree(&inode.block)?;
+        let mut bytes_read = 0;
+
+        for extent in extents {
+            let extent_start = extent.first_block as u64 * self.block_size as u64;
+            let extent_len = extent.get_actual_len() as u64 * self.block_size as u64;
+            let extent_end = extent_start + extent_len;
+
+            if offset + buf.len() as u64 <= extent_start || offset >= extent_end {
+                continue;
+            }
+
+            let read_start = offset.saturating_sub(extent_start);
+            let read_end = std::cmp::min(extent_len, offset + buf.len() as u64 - extent_start);
+            let to_read = (read_end - read_start) as usize;
+
+            let physical_offset = extent.start_block() * self.block_size as u64 + read_start;
+            self.reader.seek(SeekFrom::Start(physical_offset))?;
+            self.reader
+                .read_exact(&mut buf[bytes_read..bytes_read + to_read])?;
+
+            bytes_read += to_read;
+            if bytes_read >= buf.len() {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn read_via_indirect(&mut self, inode: &Inode, offset: u64, buf: &mut [u8]) -> Result<()> {
+        let block_size = self.block_size as u64;
+        let start_block = offset / block_size;
+        let end_block = (offset + buf.len() as u64).div_ceil(block_size);
+        let mut bytes_read = 0;
+
+        for block_idx in start_block..end_block {
+            let block_offset = if block_idx == start_block {
+                (offset % block_size) as usize
+            } else {
+                0
+            };
+
+            let to_read = std::cmp::min(
+                self.block_size as usize - block_offset,
+                buf.len() - bytes_read,
+            );
+
+            let physical_block = self.resolve_block(inode, block_idx as u32)?;
+
+            if physical_block == 0 {
+                buf[bytes_read..bytes_read + to_read].fill(0);
+            } else {
+                let physical_offset = physical_block * block_size + block_offset as u64;
+                self.reader.seek(SeekFrom::Start(physical_offset))?;
+                self.reader
+                    .read_exact(&mut buf[bytes_read..bytes_read + to_read])?;
+            }
+
+            bytes_read += to_read;
+        }
+
+        Ok(())
     }
 
     fn read_block_addr(&mut self, block_num: u64, index: u32) -> Result<u64> {
