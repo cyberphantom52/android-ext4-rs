@@ -205,7 +205,7 @@ impl<R: Read + Seek> Volume<R> {
                 ((offset + actual_length as u64).div_ceil(self.block_size as u64)) as usize;
 
             for block_idx in start_block..end_block {
-                let physical_block = self.get_block_from_inode(inode, block_idx as u32)?;
+                let physical_block = self.resolve_block(inode, block_idx as u32)?;
 
                 if physical_block == 0 {
                     let block_offset = if block_idx == start_block {
@@ -251,118 +251,46 @@ impl<R: Read + Seek> Volume<R> {
         Ok(result)
     }
 
+    fn read_block_addr(&mut self, block_num: u64, index: u32) -> Result<u64> {
+        if block_num == 0 {
+            return Ok(0);
+        }
+        let block_data = self.read_block(block_num)?;
+        let offset = (index * 4) as usize;
+        Ok(u32::from_le_bytes(block_data[offset..offset + 4].try_into().unwrap()) as u64)
+    }
+
     /// Get block address from inode (handles indirect blocks)
-    fn get_block_from_inode(&mut self, inode: &Inode, logical_block: u32) -> Result<u64> {
+    fn resolve_block(&mut self, inode: &Inode, logical_block: u32) -> Result<u64> {
         let addr_per_block = self.block_size / 4;
 
-        // Direct blocks
         if logical_block < 12 {
             return Ok(inode.block[logical_block as usize] as u64);
         }
 
         let mut block_idx = logical_block - 12;
 
-        // Single indirect
         if block_idx < addr_per_block {
-            let indirect_block = inode.block[12] as u64;
-            if indirect_block == 0 {
-                return Ok(0);
-            }
-            let block_data = self.read_block(indirect_block)?;
-            let offset = (block_idx * 4) as usize;
-            let addr = u32::from_le_bytes([
-                block_data[offset],
-                block_data[offset + 1],
-                block_data[offset + 2],
-                block_data[offset + 3],
-            ]);
-            return Ok(addr as u64);
+            return self.read_block_addr(inode.block[12] as u64, block_idx);
         }
 
         block_idx -= addr_per_block;
 
-        // Double indirect
         if block_idx < addr_per_block * addr_per_block {
-            let double_indirect = inode.block[13] as u64;
-            if double_indirect == 0 {
-                return Ok(0);
-            }
-
-            let first_level_idx = block_idx / addr_per_block;
-            let second_level_idx = block_idx % addr_per_block;
-
-            let first_level_data = self.read_block(double_indirect)?;
-            let offset = (first_level_idx * 4) as usize;
-            let indirect_block = u32::from_le_bytes([
-                first_level_data[offset],
-                first_level_data[offset + 1],
-                first_level_data[offset + 2],
-                first_level_data[offset + 3],
-            ]) as u64;
-
-            if indirect_block == 0 {
-                return Ok(0);
-            }
-
-            let second_level_data = self.read_block(indirect_block)?;
-            let offset = (second_level_idx * 4) as usize;
-            let addr = u32::from_le_bytes([
-                second_level_data[offset],
-                second_level_data[offset + 1],
-                second_level_data[offset + 2],
-                second_level_data[offset + 3],
-            ]);
-            return Ok(addr as u64);
+            let indirect =
+                self.read_block_addr(inode.block[13] as u64, block_idx / addr_per_block)?;
+            return self.read_block_addr(indirect, block_idx % addr_per_block);
         }
 
         block_idx -= addr_per_block * addr_per_block;
 
-        // Triple indirect
-        let triple_indirect = inode.block[14] as u64;
-        if triple_indirect == 0 {
-            return Ok(0);
-        }
-
-        let first_level_idx = block_idx / (addr_per_block * addr_per_block);
-        let second_level_idx = (block_idx / addr_per_block) % addr_per_block;
-        let third_level_idx = block_idx % addr_per_block;
-
-        let first_level_data = self.read_block(triple_indirect)?;
-        let offset = (first_level_idx * 4) as usize;
-        let double_indirect = u32::from_le_bytes([
-            first_level_data[offset],
-            first_level_data[offset + 1],
-            first_level_data[offset + 2],
-            first_level_data[offset + 3],
-        ]) as u64;
-
-        if double_indirect == 0 {
-            return Ok(0);
-        }
-
-        let second_level_data = self.read_block(double_indirect)?;
-        let offset = (second_level_idx * 4) as usize;
-        let indirect_block = u32::from_le_bytes([
-            second_level_data[offset],
-            second_level_data[offset + 1],
-            second_level_data[offset + 2],
-            second_level_data[offset + 3],
-        ]) as u64;
-
-        if indirect_block == 0 {
-            return Ok(0);
-        }
-
-        let third_level_data = self.read_block(indirect_block)?;
-        let offset = (third_level_idx * 4) as usize;
-        let addr = u32::from_le_bytes([
-            third_level_data[offset],
-            third_level_data[offset + 1],
-            third_level_data[offset + 2],
-            third_level_data[offset + 3],
-        ]);
-
-        Ok(addr as u64)
+        let double = self.read_block_addr(
+            inode.block[14] as u64,
+            block_idx / (addr_per_block * addr_per_block),
+        )?;
+        let indirect =
+            self.read_block_addr(double, (block_idx / addr_per_block) % addr_per_block)?;
+        self.read_block_addr(indirect, block_idx % addr_per_block)
     }
 
     fn parse_extent_tree(&mut self, block_data: &[u32; 15]) -> Result<Vec<Extent>> {
