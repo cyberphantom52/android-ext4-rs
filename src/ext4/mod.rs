@@ -6,6 +6,7 @@ mod inode;
 mod superblock;
 mod volume;
 mod walker;
+mod xattr;
 
 pub use block::BlockGroupDescriptor;
 pub use extent::{Extent, ExtentHeader, ExtentIndex};
@@ -14,6 +15,7 @@ pub use inode::{Inode, Linux2};
 pub use superblock::Superblock;
 pub use volume::Volume;
 pub use walker::{DirectoryWalker, WalkItem};
+pub use xattr::XAttrEntry;
 
 use thiserror::Error;
 

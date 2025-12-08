@@ -2,10 +2,13 @@ use bitflags::bitflags;
 use nom::Finish;
 use nom_derive::{NomLE, Parse};
 
-use crate::{Ext4Error, Result};
+use crate::{
+    Ext4Error, Result,
+    ext4::xattr::{XAttrEntry, XAttrEntryHeader, XAttrIbodyHeader},
+};
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]
+#[derive(Debug, Clone, NomLE)]
 pub struct Inode {
     #[nom(Parse = "Mode::parse")]
     pub mode: Mode,
@@ -40,6 +43,10 @@ pub struct Inode {
     pub crtime: u32,
     pub crtime_extra: u32,
     pub version_hi: u32,
+    pub project_id: u32,
+
+    #[nom(Ignore)]
+    pub inline_xattrs: Vec<XAttrEntry>,
 }
 
 impl Inode {
@@ -55,7 +62,7 @@ impl Inode {
 
     // Other constants
     const _BLOCK_SIZE: usize = 512;
-    const _GOOD_OLD_SIZE: u16 = 128;
+    pub const GOOD_OLD_SIZE: u16 = 128;
     pub const DIRECT_BLOCKS: u32 = 12;
     pub const INDIRECT_BLOCK_IDX: usize = 12;
     pub const DOUBLE_INDIRECT_BLOCK_IDX: usize = 13;
@@ -63,10 +70,71 @@ impl Inode {
     pub const FAST_SYMLINK_MAX_SIZE: u64 = 60;
 
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        match Parse::parse(bytes).finish() {
-            Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+        let mut inode: Inode = match Parse::parse(bytes).finish() {
+            Ok((_, descriptor)) => descriptor,
+            Err(e) => return Err(Ext4Error::Parse(format!("{:?}", e))),
+        };
+
+        if inode.extra_isize > 0 {
+            let start_offset = (Self::GOOD_OLD_SIZE + inode.extra_isize) as usize;
+            let inode_size = bytes.len();
+
+            let inline_data = bytes.get(start_offset..inode_size).ok_or_else(|| {
+                Ext4Error::Parse("Inode extra size exceeds available data".to_string())
+            })?;
+
+            if inline_data.len() >= 4 {
+                XAttrIbodyHeader::parse(inline_data)?; // Validate header
+                if inline_data.len() > XAttrIbodyHeader::SIZE {
+                    inode.inline_xattrs =
+                        Self::parse_inline_xattr_entries(&inline_data[XAttrIbodyHeader::SIZE..]);
+                }
+            }
         }
+
+        Ok(inode)
+    }
+    fn parse_inline_xattr_entries(raw_data: &[u8]) -> Vec<XAttrEntry> {
+        let mut xattrs = Vec::new();
+        let mut pos = 0;
+
+        while pos + XAttrEntry::HEADER_SIZE <= raw_data.len() {
+            let start_offset = pos + XAttrEntry::HEADER_SIZE;
+            let header = match XAttrEntryHeader::parse(&raw_data[pos..]) {
+                Ok(h) => h,
+                Err(_) => break,
+            };
+
+            if header.is_end_of_entries() {
+                break;
+            }
+
+            let name = match raw_data.get(start_offset..start_offset + header.name_len as usize) {
+                Some(bytes) => String::from_utf8_lossy(bytes).to_string(),
+                None => break,
+            };
+
+            let mut value = Vec::new();
+            if header.value_inum == 0 && header.value_size > 0 {
+                let value_start_offset = header.value_offs as usize;
+                let value_end_offset = value_start_offset + header.value_size as usize;
+                value = raw_data
+                    .get(value_start_offset..value_end_offset)
+                    .map(|v| v.to_vec())
+                    .unwrap_or_default();
+            }
+
+            let entry = XAttrEntry {
+                header,
+                name,
+                value,
+            };
+
+            pos += entry.entry_size();
+            xattrs.push(entry);
+        }
+
+        xattrs
     }
 
     /// Get the file type from the inode
@@ -97,6 +165,10 @@ impl Inode {
     /// Get only the permission bits from the mode
     pub fn permissions(&self) -> Mode {
         Mode::from_bits_truncate(self.mode.bits() & Self::MODE_PERM_MASK)
+    }
+
+    pub fn xattr_block_number(&self) -> u64 {
+        (self.osd2.file_acl_high as u64) << 32 | self.file_acl as u64
     }
 }
 

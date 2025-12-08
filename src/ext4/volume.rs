@@ -12,6 +12,7 @@ use crate::{
         file::File,
         inode::Inode,
         superblock::Superblock,
+        xattr::{self, XAttrEntry},
     },
     utils::NormalizePath,
 };
@@ -155,6 +156,32 @@ impl<R: Read + Seek> Volume<R> {
     pub fn open_dir<'a>(&'a mut self, path: impl AsRef<Path>) -> Result<Directory<'a, R>> {
         let inode = self.lookup_path(path)?;
         Directory::new(self, inode)
+    }
+
+    /// Read all data from an inode (public API)
+    pub fn read_inode_data_all(&mut self, inode: &Inode) -> Result<Vec<u8>> {
+        let file_size = self.superblock.inode_size_file(inode);
+        self.read_inode_data(inode, 0, file_size as usize)
+    }
+
+    /// Read extended attributes for an inode
+    pub fn read_xattrs(&mut self, inode: &Inode) -> Result<Vec<XAttrEntry>> {
+        let mut xattrs = Vec::new();
+
+        // Add inline xattrs (already parsed during Inode::parse)
+        xattrs.extend(inode.inline_xattrs.clone());
+
+        // Check for external xattr block
+        if inode.file_acl != 0 {
+            let xattr_block = inode.xattr_block_number();
+
+            let block_data = self.read_block(xattr_block)?;
+            if let Ok(block_xattrs) = xattr::parse_xattrs_from_block(&block_data) {
+                xattrs.extend(block_xattrs);
+            }
+        }
+
+        Ok(xattrs)
     }
 
     /// Read inode data at a given offset
