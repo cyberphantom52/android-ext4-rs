@@ -163,39 +163,44 @@ impl XAttrEntry {
     /// Parse capability value and return it as a hex string
     /// Format: capabilities=0x... or empty if no caps
     pub fn capability_string(&self) -> Option<String> {
+        #[derive(Debug, NomLE)]
+        struct CapData {
+            permitted: u32,
+            _inheritable: u32,
+        }
+
+        #[derive(Debug, NomLE)]
+        struct VfsCapData {
+            _magic_etc: u32,
+            #[nom(Count = "2")] // VFS_CAP_U32
+            data: Vec<CapData>,
+        }
+
+        impl VfsCapData {
+            pub fn parse(bytes: &[u8]) -> Result<Self> {
+                match Parse::parse(bytes).finish() {
+                    Ok((_, descriptor)) => Ok(descriptor),
+                    Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+                }
+            }
+
+            pub fn capabilities(&self) -> Option<u64> {
+                let permitted_lo = self.data.get(0)?.permitted;
+                let permitted_hi = self.data.get(1)?.permitted;
+
+                let caps = ((permitted_hi as u64) << 32) | (permitted_lo as u64);
+
+                if caps == 0 { None } else { Some(caps) }
+            }
+        }
+
         if !self.is_capability() || self.value.len() < 20 {
             return None;
         }
 
-        // Linux capability structure (VFS_CAP_REVISION_2 or _3)
-        // struct vfs_cap_data {
-        //     __le32 magic_etc;      // includes version
-        //     struct {
-        //         __le32 permitted;
-        //         __le32 inheritable;
-        //     } data[VFS_CAP_U32];   // 2 entries for 64-bit caps
-        // }
-
-        let data = &self.value;
-
-        let _magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
-        let permitted_lo = u32::from_le_bytes(data[4..8].try_into().unwrap());
-        let _inheritable_lo = u32::from_le_bytes(data[8..12].try_into().unwrap());
-        let permitted_hi = u32::from_le_bytes(data[12..16].try_into().unwrap());
-        let _inheritable_hi = u32::from_le_bytes(data[16..20].try_into().unwrap());
-
-        // Combine into 64-bit capability
-        let caps = if permitted_lo > 65535 {
-            ((permitted_hi as u64) << 32) | (permitted_lo as u64)
-        } else {
-            ((permitted_hi as u64) << 32) | ((_inheritable_lo as u64) << 16) | (permitted_lo as u64)
-        };
-
-        if caps == 0 {
-            None
-        } else {
-            Some(format!(" capabilities={:#x}", caps))
-        }
+        let cap = VfsCapData::parse(&self.value).ok()?;
+        cap.capabilities()
+            .map(|caps| format!(" capabilities={:#x}", caps))
     }
 }
 
