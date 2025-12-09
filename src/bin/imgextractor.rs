@@ -44,37 +44,13 @@ fn default_output_path() -> PathBuf {
     PathBuf::from(format!("output-{}", timestamp))
 }
 
-/// Path information for an entry
-struct EntryPaths {
-    /// Path with spaces replaced by underscores
-    safe: String,
-    /// Full filesystem path (mount_name + safe_path)
-    fs_path: String,
-}
-
-impl EntryPaths {
-    fn new(path_str: &str, mount_name: &str) -> Self {
-        let safe = path_str.replace(' ', "_");
-        let fs_path = format!("{}{}", mount_name, safe);
-        Self { safe, fs_path }
-    }
-
-    fn target_path(&self, base: &std::path::Path) -> PathBuf {
-        base.join(self.safe.trim_start_matches('/'))
-    }
-}
-
-/// File handles for config output
-struct ConfigWriters {
-    fsconfig: BufWriter<File>,
-    contexts: BufWriter<File>,
-}
-
 /// Main extractor
 struct Extractor<R: Read + Seek> {
     volume: Volume<R>,
     arguments: Arguments,
     mount_name: String,
+    fsconfig: BufWriter<File>,
+    contexts: BufWriter<File>,
 }
 
 impl<R: Read + Seek> Extractor<R> {
@@ -93,20 +69,26 @@ impl<R: Read + Seek> Extractor<R> {
             mount_name
         };
 
-        let extractor = Self {
+        let config_dir = arguments.output_dir.join("config");
+        let extract_dir = arguments.output_dir.join(&mount_name);
+
+        fs::create_dir_all(&config_dir)?;
+        fs::create_dir_all(&extract_dir)?;
+
+        let fsconfig = BufWriter::new(File::create(
+            config_dir.join(format!("{}_fs_config", mount_name)),
+        )?);
+        let contexts = BufWriter::new(File::create(
+            config_dir.join(format!("{}_file_contexts", mount_name)),
+        )?);
+
+        Ok(Self {
             volume,
             arguments,
             mount_name,
-        };
-
-        fs::create_dir_all(extractor.config_dir())?;
-        fs::create_dir_all(extractor.extract_dir())?;
-
-        Ok(extractor)
-    }
-
-    fn config_dir(&self) -> PathBuf {
-        self.arguments.output_dir.join("config")
+            fsconfig,
+            contexts,
+        })
     }
 
     fn extract_dir(&self) -> PathBuf {
@@ -155,31 +137,20 @@ impl<R: Read + Seek> Extractor<R> {
 
         spinner.finish_with_message(format!("Found {} entries", items.len()));
 
-        // Open config file handles
-        let config_dir = self.config_dir();
-        let mut writers = ConfigWriters {
-            fsconfig: BufWriter::new(File::create(
-                config_dir.join(format!("{}_fs_config", self.mount_name)),
-            )?),
-            contexts: BufWriter::new(File::create(
-                config_dir.join(format!("{}_file_contexts", self.mount_name)),
-            )?),
-        };
-
         // Add root entries
-        writeln!(writers.fsconfig, "/ 0 0 0755")?;
-        writeln!(writers.fsconfig, "{} 0 0 0755", self.mount_name)?;
+        writeln!(self.fsconfig, "/ 0 0 0755")?;
+        writeln!(self.fsconfig, "{} 0 0 0755", self.mount_name)?;
 
         // Process entries
         let pb = self.create_progress_bar(items.len() as u64, "Extracting");
 
         for item in &items {
-            self.process_item(&item, &mut writers)?;
+            self.process_item(&item)?;
             pb.inc(1);
         }
 
-        writers.fsconfig.flush()?;
-        writers.contexts.flush()?;
+        self.fsconfig.flush()?;
+        self.contexts.flush()?;
 
         pb.finish_with_message("Extraction complete");
 
@@ -191,27 +162,23 @@ impl<R: Read + Seek> Extractor<R> {
         Ok(())
     }
 
-    fn process_item(&mut self, item: &WalkItem, writers: &mut ConfigWriters) -> io::Result<()> {
-        let path_str = item.path().to_string_lossy();
-
-        let paths = EntryPaths::new(&path_str, &self.mount_name);
+    fn process_item(&mut self, item: &WalkItem) -> io::Result<()> {
+        let path = item.path();
         let meta = item.attributes();
 
         // Detect System-as-Root (SAR) and write context entries
-        if matches!(item.r#type(), FileType::RegularFile) && path_str.contains("/system/build.prop")
+        if matches!(item.r#type(), FileType::RegularFile)
+            && path.to_string_lossy().contains("/system/build.prop")
         {
             let dir_escaped = escape_regex(&self.mount_name);
-            writeln!(writers.contexts, "/{} u:object_r:rootfs:s0", dir_escaped)?;
-            writeln!(
-                writers.contexts,
-                "/{}(/.*)? u:object_r:rootfs:s0",
-                dir_escaped
-            )?;
+            writeln!(self.contexts, "/{} u:object_r:rootfs:s0", dir_escaped)?;
+            writeln!(self.contexts, "/{}(/.*)? u:object_r:rootfs:s0", dir_escaped)?;
         }
 
         let extract_dir = self.extract_dir();
-        let escaped = escape_regex(&paths.fs_path);
-        let target = paths.target_path(&extract_dir);
+        let fs_path = format!("{}{}", self.mount_name, path.display());
+        let escaped = escape_regex(&fs_path);
+        let target = extract_dir.join(path.strip_prefix("/").unwrap_or(path));
 
         if let Some(parent) = target.parent() {
             if !parent.exists() {
@@ -233,7 +200,7 @@ impl<R: Read + Seek> Extractor<R> {
             FileType::Directory => {
                 fs::create_dir_all(target)?;
                 if let Some(selabel) = meta.selinux() {
-                    writeln!(writers.contexts, "/{}(/.*)? {}", escaped, selabel)?;
+                    writeln!(self.contexts, "/{}(/.*)? {}", escaped, selabel)?;
                 }
             }
             FileType::SymbolicLink => {
@@ -250,15 +217,15 @@ impl<R: Read + Seek> Extractor<R> {
 
         let mode = meta.mode_with_caps();
         writeln!(
-            writers.fsconfig,
+            self.fsconfig,
             "{} {} {} {}",
-            paths.fs_path,
+            fs_path,
             meta.uid(),
             meta.gid(),
             mode
         )?;
         if let Some(selabel) = meta.selinux() {
-            writeln!(writers.contexts, "/{} {}", escaped, selabel)?;
+            writeln!(self.contexts, "/{} {}", escaped, selabel)?;
         }
 
         Ok(())
