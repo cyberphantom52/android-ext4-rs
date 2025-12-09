@@ -45,8 +45,12 @@ impl<R: Read + Seek> Volume<R> {
     }
 
     /// Get the volume name
-    pub fn name(&self) -> String {
-        self.superblock.volume_name()
+    pub fn name(&self) -> Option<String> {
+        if self.superblock.volume_name().is_empty() {
+            None
+        } else {
+            Some(self.superblock.volume_name().to_string())
+        }
     }
 
     /// Get the superblock

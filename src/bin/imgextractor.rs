@@ -57,17 +57,14 @@ impl<R: Read + Seek> Extractor<R> {
     fn new(reader: R, arguments: Arguments) -> io::Result<Self> {
         let volume = Volume::new(reader)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
-        let mount_name = volume.name();
-        let mount_name = if mount_name.is_empty() {
+        let mount_name = volume.name().unwrap_or(
             arguments
                 .image
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
-                .to_string()
-        } else {
-            mount_name
-        };
+                .to_string(),
+        );
 
         let config_dir = arguments.output_dir.join("config");
         let extract_dir = arguments.output_dir.join(&mount_name);
