@@ -5,13 +5,13 @@ use crate::{Ext4Error, Result};
 
 #[derive(Debug, Clone, Copy, NomLE)]
 #[repr(C)]
-pub struct XAttrHeader {
+struct XAttrHeader {
     #[nom(Verify(*magic == 0xEA020000))]
-    pub magic: u32,
-    pub refcount: u32,
-    pub blocks: u32,
-    pub hash: u32,
-    pub checksum: u32,
+    magic: u32,
+    refcount: u32,
+    blocks: u32,
+    hash: u32,
+    checksum: u32,
     _reserved: [u8; 12],
 }
 
@@ -28,9 +28,9 @@ impl XAttrHeader {
 
 #[derive(Debug, Clone, Copy, NomLE)]
 #[repr(C)]
-pub struct XAttrIbodyHeader {
+pub(crate) struct XAttrIbodyHeader {
     #[nom(Verify(*magic == 0xEA020000))]
-    pub magic: u32,
+    magic: u32,
 }
 
 impl XAttrIbodyHeader {
@@ -46,13 +46,13 @@ impl XAttrIbodyHeader {
 
 #[derive(Debug, Clone, NomLE)]
 #[repr(C)]
-pub struct XAttrEntryHeader {
-    pub name_len: u8,
-    pub name_index: XAttrNameIndex,
-    pub value_offs: u16,
-    pub value_inum: u32,
-    pub value_size: u32,
-    pub hash: u32,
+struct XAttrEntryHeader {
+    name_len: u8,
+    name_index: XAttrNameIndex,
+    value_offs: u16,
+    value_inum: u32,
+    value_size: u32,
+    hash: u32,
 }
 
 impl XAttrEntryHeader {
@@ -71,9 +71,9 @@ impl XAttrEntryHeader {
 
 #[derive(Debug, Clone)]
 pub struct XAttrEntry {
-    pub header: XAttrEntryHeader,
-    pub name: String,
-    pub value: Option<Vec<u8>>,
+    header: XAttrEntryHeader,
+    name: String,
+    value: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, NomLE)]

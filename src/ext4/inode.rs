@@ -11,42 +11,42 @@ use crate::{
 #[derive(Debug, Clone, NomLE)]
 pub struct Inode {
     #[nom(Parse = "Mode::parse")]
-    pub mode: Mode,
-    pub uid: u16,
-    pub size: u32,
-    pub atime: u32,
-    pub ctime: u32,
-    pub mtime: u32,
-    pub dtime: u32,
-    pub gid: u16,
-    pub links_count: u16,
-    pub blocks: u32,
+    mode: Mode,
+    uid: u16,
+    size: u32,
+    atime: u32,
+    ctime: u32,
+    mtime: u32,
+    dtime: u32,
+    gid: u16,
+    links_count: u16,
+    blocks: u32,
 
     #[nom(Parse = "Flags::parse")]
-    pub flags: Flags,
+    flags: Flags,
 
-    pub osd1: u32,
+    osd1: u32,
 
-    pub block: [u32; 15],
-    pub generation: u32,
-    pub file_acl: u32,
-    pub size_hi: u32,
-    pub faddr: u32,
+    pub(crate) block: [u32; 15],
+    generation: u32,
+    file_acl: u32,
+    size_hi: u32,
+    faddr: u32,
 
-    pub osd2: Linux2,
+    osd2: Linux2,
 
-    pub extra_isize: u16,
-    pub checksum_hi: u16,
-    pub ctime_extra: u32,
-    pub mtime_extra: u32,
-    pub atime_extra: u32,
-    pub crtime: u32,
-    pub crtime_extra: u32,
-    pub version_hi: u32,
-    pub project_id: u32,
+    extra_isize: u16,
+    checksum_hi: u16,
+    ctime_extra: u32,
+    mtime_extra: u32,
+    atime_extra: u32,
+    crtime: u32,
+    crtime_extra: u32,
+    version_hi: u32,
+    project_id: u32,
 
     #[nom(Ignore)]
-    pub inline_xattrs: Vec<XAttrEntry>,
+    inline_xattrs: Vec<XAttrEntry>,
 }
 
 impl Inode {
@@ -106,6 +106,22 @@ impl Inode {
         )
     }
 
+    pub fn size(&self) -> u64 {
+        ((self.size_hi as u64) << 32) | (self.size as u64)
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn uid(&self) -> u32 {
+        ((self.osd2.uid_high as u32) << 16) | (self.uid as u32)
+    }
+
+    pub fn gid(&self) -> u32 {
+        ((self.osd2.gid_high as u32) << 16) | (self.gid as u32)
+    }
+
     /// Get the file type from the inode
     pub fn file_type(&self) -> Option<FileType> {
         FileType::from_mode(self.mode.bits())
@@ -136,8 +152,17 @@ impl Inode {
         Mode::from_bits_truncate(self.mode.bits() & Self::MODE_PERM_MASK)
     }
 
-    pub fn xattr_block_number(&self) -> u64 {
-        (self.osd2.file_acl_high as u64) << 32 | self.file_acl as u64
+    pub fn xattr_block_number(&self) -> Option<u64> {
+        let block_num = (self.osd2.file_acl_high as u64) << 32 | self.file_acl as u64;
+        if block_num != 0 {
+            Some(block_num)
+        } else {
+            None
+        }
+    }
+
+    pub fn xattrs(&self) -> &[XAttrEntry] {
+        &self.inline_xattrs
     }
 }
 
@@ -241,8 +266,8 @@ bitflags! {
 }
 
 impl Flags {
-    pub const USER_VISIBLE: u32 = 0x705BDFFF;
-    pub const USER_MODIFIABLE: u32 = 0x604BC0FF;
+    const USER_VISIBLE: u32 = 0x705BDFFF;
+    const USER_MODIFIABLE: u32 = 0x604BC0FF;
 
     pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
         let (input, bits) = nom::number::complete::le_u32(input)?;

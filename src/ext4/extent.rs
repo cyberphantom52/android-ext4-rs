@@ -8,11 +8,11 @@ use super::Ext4Lblk;
 #[repr(C)]
 pub struct ExtentHeader {
     #[nom(Verify = "*magic == 0xF30A")]
-    pub magic: u16,
-    pub entries_count: u16,
-    pub max_entries_count: u16,
-    pub depth: u16,
-    pub generation: u32,
+    magic: u16,
+    entries_count: u16,
+    max_entries_count: u16,
+    depth: u16,
+    generation: u32,
 }
 
 impl ExtentHeader {
@@ -24,15 +24,23 @@ impl ExtentHeader {
             Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
         }
     }
+
+    pub fn entries_count(&self) -> u16 {
+        self.entries_count
+    }
+
+    pub fn depth(&self) -> u16 {
+        self.depth
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, NomLE)]
 #[repr(C)]
 pub struct ExtentIndex {
-    pub first_block: u32,
-    pub leaf_lo: u32,
-    pub leaf_hi: u16,
-    pub padding: u16,
+    first_block: u32,
+    leaf_lo: u32,
+    leaf_hi: u16,
+    padding: u16,
 }
 
 impl ExtentIndex {
@@ -54,10 +62,10 @@ impl ExtentIndex {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, NomLE)]
 #[repr(C)]
 pub struct Extent {
-    pub first_block: u32,
-    pub block_count: u16,
-    pub start_hi: u16,
-    pub start_lo: u32,
+    first_block: u32,
+    block_count: u16,
+    start_hi: u16,
+    start_lo: u32,
 }
 
 impl Extent {
@@ -71,6 +79,10 @@ impl Extent {
             Ok((_, descriptor)) => Ok(descriptor),
             Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
         }
+    }
+
+    pub fn first_block(&self) -> u64 {
+        self.first_block as u64
     }
 
     pub fn start_block(&self) -> u64 {

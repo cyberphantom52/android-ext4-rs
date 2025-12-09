@@ -7,7 +7,6 @@ pub struct File<'a, R: Read + Seek> {
     volume: &'a mut Volume<R>,
     inode: Inode,
     position: u64,
-    size: u64,
 }
 
 impl<'a, R: Read + Seek> File<'a, R> {
@@ -17,19 +16,16 @@ impl<'a, R: Read + Seek> File<'a, R> {
             return Err(Ext4Error::InvalidPath("Not a regular file".to_string()));
         }
 
-        let size = volume.superblock().inode_size_file(&inode);
-
         Ok(Self {
             volume,
             inode,
             position: 0,
-            size,
         })
     }
 
     /// Get the file size
     pub fn size(&self) -> u64 {
-        self.size
+        self.inode.size()
     }
 
     /// Get the current position in the file
@@ -46,17 +42,17 @@ impl<'a, R: Read + Seek> File<'a, R> {
     pub fn read_all(&mut self) -> Result<Vec<u8>> {
         self.position = 0;
         self.volume
-            .read_inode_data(&self.inode, 0, self.size as usize)
+            .read_inode_data(&self.inode, 0, self.size() as usize)
     }
 }
 
 impl<'a, R: Read + Seek> Read for File<'a, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.position >= self.size {
+        if self.position >= self.size() {
             return Ok(0); // EOF
         }
 
-        let to_read = std::cmp::min(buf.len(), (self.size - self.position) as usize);
+        let to_read = std::cmp::min(buf.len(), (self.size() - self.position) as usize);
 
         let data = self
             .volume
@@ -75,7 +71,7 @@ impl<'a, R: Read + Seek> Seek for File<'a, R> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset as i64,
-            SeekFrom::End(offset) => self.size as i64 + offset,
+            SeekFrom::End(offset) => self.size() as i64 + offset,
             SeekFrom::Current(offset) => self.position as i64 + offset,
         };
 

@@ -1,4 +1,4 @@
-use crate::ext4::{block::BlockGroupDescriptor, inode::Inode};
+use crate::ext4::block::BlockGroupDescriptor;
 use crate::{Ext4Error, Result};
 use bitflags::bitflags;
 use nom::Finish;
@@ -156,15 +156,6 @@ impl Superblock {
             Ok((_, superblock)) => Ok(superblock),
             Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
         }
-    }
-
-    pub fn inode_size_file(&self, inode: &Inode) -> u64 {
-        let mut v = inode.size as u64;
-        if self.rev_level == Revision::Dynamic && inode.is_regular_file() {
-            let hi = (inode.size_hi as u64) << 32;
-            v |= hi;
-        }
-        v
     }
 
     pub fn block_size(&self) -> u32 {

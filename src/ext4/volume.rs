@@ -160,8 +160,7 @@ impl<R: Read + Seek> Volume<R> {
 
     /// Read all data from an inode (public API)
     pub fn read_inode_data_all(&mut self, inode: &Inode) -> Result<Vec<u8>> {
-        let file_size = self.superblock.inode_size_file(inode);
-        self.read_inode_data(inode, 0, file_size as usize)
+        self.read_inode_data(inode, 0, inode.size() as usize)
     }
 
     /// Read extended attributes for an inode
@@ -169,12 +168,10 @@ impl<R: Read + Seek> Volume<R> {
         let mut xattrs = Vec::new();
 
         // Add inline xattrs (already parsed during Inode::parse)
-        xattrs.extend(inode.inline_xattrs.clone());
+        xattrs.extend(inode.xattrs().iter().cloned());
 
         // Check for external xattr block
-        if inode.file_acl != 0 {
-            let xattr_block = inode.xattr_block_number();
-
+        if let Some(xattr_block) = inode.xattr_block_number() {
             let block_data = self.read_block(xattr_block)?;
             if let Ok(block_xattrs) = xattr::parse_xattrs_from_block(&block_data) {
                 xattrs.extend(block_xattrs);
@@ -191,7 +188,7 @@ impl<R: Read + Seek> Volume<R> {
         offset: u64,
         length: usize,
     ) -> Result<Vec<u8>> {
-        let file_size = self.superblock.inode_size_file(inode);
+        let file_size = inode.size();
 
         if offset >= file_size {
             return Err(Ext4Error::ReadBeyondEof);
@@ -214,7 +211,7 @@ impl<R: Read + Seek> Volume<R> {
         let mut bytes_read = 0;
 
         for extent in extents {
-            let extent_start = extent.first_block as u64 * self.block_size as u64;
+            let extent_start = extent.first_block() * self.block_size as u64;
             let extent_len = extent.get_actual_len() as u64 * self.block_size as u64;
             let extent_end = extent_start + extent_len;
 
@@ -333,8 +330,8 @@ impl<R: Read + Seek> Volume<R> {
         let mut extents = Vec::new();
         let mut offset = ExtentHeader::SIZE;
 
-        for _ in 0..header.entries_count {
-            if header.depth == 0 {
+        for _ in 0..header.entries_count() {
+            if header.depth() == 0 {
                 extents.push(Extent::parse(&block_data[offset..offset + Extent::SIZE])?);
             } else {
                 let index = ExtentIndex::parse(&block_data[offset..offset + ExtentIndex::SIZE])?;
@@ -353,7 +350,7 @@ impl<R: Read + Seek> Volume<R> {
             return Err(Ext4Error::NotADirectory);
         }
 
-        let file_size = self.superblock.inode_size_file(inode);
+        let file_size = inode.size();
         let data = self.read_inode_data(inode, 0, file_size as usize)?;
 
         let mut entries = Vec::new();
@@ -410,7 +407,7 @@ impl<R: Read + Seek> Volume<R> {
             return Err(Ext4Error::InvalidPath("Not a symlink".to_string()));
         }
 
-        let file_size = self.superblock.inode_size_file(inode);
+        let file_size = inode.size();
 
         if file_size < Inode::FAST_SYMLINK_MAX_SIZE {
             // Fast symlink - stored in inode
