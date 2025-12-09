@@ -8,142 +8,142 @@ use std::cmp::Ordering;
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq, NomLE)]
 pub struct Superblock {
-    pub inodes_count: u32,
-    pub blocks_count_lo: u32,
-    pub reserved_blocks_count_lo: u32,
-    pub free_blocks_count_lo: u32,
-    pub free_inodes_count: u32,
-    pub first_data_block: u32,
-    pub log_block_size: u32,
-    pub log_cluster_size: u32,
-    pub blocks_per_group: u32,
-    pub frags_per_group: u32,
-    pub inodes_per_group: u32,
-    pub mount_time: u32,
-    pub write_time: u32,
-    pub mount_count: u16,
-    pub max_mount_count: u16,
+    inodes_count: u32,
+    blocks_count_lo: u32,
+    reserved_blocks_count_lo: u32,
+    free_blocks_count_lo: u32,
+    free_inodes_count: u32,
+    first_data_block: u32,
+    log_block_size: u32,
+    log_cluster_size: u32,
+    blocks_per_group: u32,
+    frags_per_group: u32,
+    inodes_per_group: u32,
+    mount_time: u32,
+    write_time: u32,
+    mount_count: u16,
+    max_mount_count: u16,
 
     #[nom(Verify = "*magic == 0xEF53")]
-    pub magic: u16,
+    magic: u16,
 
-    pub state: State,
-    pub errors: ErrorPolicy,
-    pub minor_rev_level: u16,
-    pub last_check_time: u32,
-    pub check_interval: u32,
-    pub creator_os: CreatorOS,
-    pub rev_level: Revision,
-    pub def_resuid: u16,
-    pub def_resgid: u16,
-    pub first_inode: u32,
-    pub inode_size: u16,
-    pub block_group_index: u16,
+    state: State,
+    errors: ErrorPolicy,
+    minor_rev_level: u16,
+    last_check_time: u32,
+    check_interval: u32,
+    creator_os: CreatorOS,
+    rev_level: Revision,
+    def_resuid: u16,
+    def_resgid: u16,
+    first_inode: u32,
+    inode_size: u16,
+    block_group_index: u16,
 
     #[nom(Parse = "CompatibleFeatures::parse")]
-    pub features_compatible: CompatibleFeatures,
+    features_compatible: CompatibleFeatures,
 
     #[nom(Parse = "IncompatibleFeatures::parse")]
-    pub features_incompatible: IncompatibleFeatures,
+    features_incompatible: IncompatibleFeatures,
 
     #[nom(Parse = "ReadOnlyCompatibleFeatures::parse")]
-    pub features_read_only: ReadOnlyCompatibleFeatures,
+    features_read_only: ReadOnlyCompatibleFeatures,
 
     #[nom(Count = "16")]
-    pub uuid: Vec<u8>,
+    uuid: Vec<u8>,
 
     #[nom(Count = "16")]
-    pub volume_name: Vec<u8>,
+    volume_name: Vec<u8>,
 
     #[nom(Count = "64")]
-    pub last_mounted: Vec<u8>,
+    last_mounted: Vec<u8>,
 
-    pub algorithm_usage_bitmap: u32,
-    pub s_prealloc_blocks: u8,
-    pub s_prealloc_dir_blocks: u8,
-    pub s_reserved_gdt_blocks: u16,
+    algorithm_usage_bitmap: u32,
+    s_prealloc_blocks: u8,
+    s_prealloc_dir_blocks: u8,
+    s_reserved_gdt_blocks: u16,
 
     #[nom(Count = "16")]
-    pub journal_uuid: Vec<u8>,
+    journal_uuid: Vec<u8>,
 
-    pub journal_inode_number: u32,
-    pub journal_dev: u32,
-    pub last_orphan: u32,
+    journal_inode_number: u32,
+    journal_dev: u32,
+    last_orphan: u32,
 
     #[nom(Count = "4")]
-    pub hash_seed: Vec<u32>,
+    hash_seed: Vec<u32>,
 
-    pub default_hash_version: DefaultHashVersion,
-    pub journal_backup_type: u8,
-    pub desc_size: u16,
+    default_hash_version: DefaultHashVersion,
+    journal_backup_type: u8,
+    desc_size: u16,
 
     #[nom(Parse = "DefaultMountOptions::parse")]
-    pub default_mount_opts: DefaultMountOptions,
+    default_mount_opts: DefaultMountOptions,
 
-    pub first_meta_bg: u32,
-    pub mkfs_time: u32,
+    first_meta_bg: u32,
+    mkfs_time: u32,
 
     #[nom(Count = "17")]
-    pub journal_blocks: Vec<u32>,
+    journal_blocks: Vec<u32>,
 
-    pub blocks_count_hi: u32,
-    pub reserved_blocks_count_hi: u32,
-    pub free_blocks_count_hi: u32,
-    pub min_extra_isize: u16,
-    pub want_extra_isize: u16,
+    blocks_count_hi: u32,
+    reserved_blocks_count_hi: u32,
+    free_blocks_count_hi: u32,
+    min_extra_isize: u16,
+    want_extra_isize: u16,
     #[nom(Parse = "Flags::parse")]
-    pub flags: Flags,
-    pub raid_stride: u16,
-    pub mmp_interval: u16,
-    pub mmp_block: u64,
-    pub raid_stripe_width: u32,
-    pub log_groups_per_flex: u8,
-    pub checksum_type: u8,
-    pub reserved_pad: u16,
-    pub kbytes_written: u64,
-    pub snapshot_inum: u32,
-    pub snapshot_id: u32,
-    pub snapshot_r_blocks_count: u64,
-    pub snapshot_list: u32,
-    pub error_count: u32,
-    pub first_error_time: u32,
-    pub first_error_ino: u32,
-    pub first_error_block: u64,
+    flags: Flags,
+    raid_stride: u16,
+    mmp_interval: u16,
+    mmp_block: u64,
+    raid_stripe_width: u32,
+    log_groups_per_flex: u8,
+    checksum_type: u8,
+    reserved_pad: u16,
+    kbytes_written: u64,
+    snapshot_inum: u32,
+    snapshot_id: u32,
+    snapshot_r_blocks_count: u64,
+    snapshot_list: u32,
+    error_count: u32,
+    first_error_time: u32,
+    first_error_ino: u32,
+    first_error_block: u64,
 
     #[nom(Count = "32")]
-    pub first_error_func: Vec<u8>,
+    first_error_func: Vec<u8>,
 
-    pub first_error_line: u32,
-    pub last_error_time: u32,
-    pub last_error_ino: u32,
-    pub last_error_line: u32,
-    pub last_error_block: u64,
+    first_error_line: u32,
+    last_error_time: u32,
+    last_error_ino: u32,
+    last_error_line: u32,
+    last_error_block: u64,
 
     #[nom(Count = "32")]
-    pub last_error_func: Vec<u8>,
+    last_error_func: Vec<u8>,
 
     #[nom(Count = "64")]
-    pub mount_opts: Vec<u8>,
+    mount_opts: Vec<u8>,
 
-    pub usr_quota_inum: u32,
-    pub grp_quota_inum: u32,
-    pub overhead_clusters: u32,
+    usr_quota_inum: u32,
+    grp_quota_inum: u32,
+    overhead_clusters: u32,
 
     #[nom(Count = "2")]
-    pub backup_bgs: Vec<u32>,
+    backup_bgs: Vec<u32>,
 
     #[nom(Count = "4")]
-    pub encrypt_algos: Vec<EncryptionAlgorithm>,
+    encrypt_algos: Vec<EncryptionAlgorithm>,
 
     #[nom(Count = "16")]
-    pub encrypt_pw_salt: Vec<u8>,
+    encrypt_pw_salt: Vec<u8>,
 
-    pub lpf_ino: u32,
+    lpf_ino: u32,
 
     #[nom(Count = "100")]
-    pub padding: Vec<u32>,
+    padding: Vec<u32>,
 
-    pub checksum: u32,
+    checksum: u32,
 }
 
 impl Superblock {
@@ -196,6 +196,14 @@ impl Superblock {
 
     pub fn free_blocks_count(&self) -> u64 {
         self.free_blocks_count_lo as u64 | ((self.free_blocks_count_hi as u64) << 32)
+    }
+
+    pub fn inodes_per_group(&self) -> u32 {
+        self.inodes_per_group
+    }
+
+    pub fn inode_size(&self) -> u64 {
+        self.inode_size as u64
     }
 }
 

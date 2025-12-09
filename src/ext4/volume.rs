@@ -93,8 +93,8 @@ impl<R: Read + Seek> Volume<R> {
             return Err(Ext4Error::InvalidInode(inode_num));
         }
 
-        let inodes_per_group = self.superblock.inodes_per_group;
-        let inode_size = self.superblock.inode_size as u64;
+        let inodes_per_group = self.superblock.inodes_per_group();
+        let inode_size = self.superblock.inode_size();
 
         let bg_index = (inode_num - 1) / inodes_per_group;
         let inode_index = (inode_num - 1) % inodes_per_group;
