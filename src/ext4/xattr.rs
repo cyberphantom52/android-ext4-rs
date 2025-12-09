@@ -64,8 +64,8 @@ impl XAttrEntryHeader {
     }
 
     pub fn is_end_of_entries(&self) -> bool {
-        (self.name_len as u32 | self.name_index as u32 | self.value_offs as u32 | self.value_inum)
-            == 0
+        // TODO: According to docs self.value_inum is also set zero to mark end of entries but we need to handle the case when it's not zero so let's avoid checking it for now
+        (self.name_len as u32 | self.name_index as u32 | self.value_offs as u32) == 0
     }
 }
 
