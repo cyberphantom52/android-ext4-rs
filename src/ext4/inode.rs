@@ -4,7 +4,7 @@ use nom_derive::{NomLE, Parse};
 
 use crate::{
     Ext4Error, Result,
-    ext4::xattr::{XAttrEntry, XAttrEntryHeader, XAttrIbodyHeader},
+    ext4::xattr::{XAttrEntry, XAttrIbodyHeader},
 };
 
 #[repr(C)]
@@ -83,58 +83,27 @@ impl Inode {
                 Ext4Error::Parse("Inode extra size exceeds available data".to_string())
             })?;
 
-            if inline_data.len() >= 4 {
-                XAttrIbodyHeader::parse(inline_data)?; // Validate header
-                if inline_data.len() > XAttrIbodyHeader::SIZE {
-                    inode.inline_xattrs =
-                        Self::parse_inline_xattr_entries(&inline_data[XAttrIbodyHeader::SIZE..]);
-                }
-            }
+            inode.inline_xattrs = Self::parse_inline_xattr(&inline_data)?;
         }
 
         Ok(inode)
     }
-    fn parse_inline_xattr_entries(raw_data: &[u8]) -> Vec<XAttrEntry> {
-        let mut xattrs = Vec::new();
-        let mut pos = 0;
 
-        while pos + XAttrEntry::HEADER_SIZE <= raw_data.len() {
-            let start_offset = pos + XAttrEntry::HEADER_SIZE;
-            let header = match XAttrEntryHeader::parse(&raw_data[pos..]) {
-                Ok(h) => h,
-                Err(_) => break,
-            };
-
-            if header.is_end_of_entries() {
-                break;
-            }
-
-            let name = match raw_data.get(start_offset..start_offset + header.name_len as usize) {
-                Some(bytes) => String::from_utf8_lossy(bytes).to_string(),
-                None => break,
-            };
-
-            let mut value = Vec::new();
-            if header.value_inum == 0 && header.value_size > 0 {
-                let value_start_offset = header.value_offs as usize;
-                let value_end_offset = value_start_offset + header.value_size as usize;
-                value = raw_data
-                    .get(value_start_offset..value_end_offset)
-                    .map(|v| v.to_vec())
-                    .unwrap_or_default();
-            }
-
-            let entry = XAttrEntry {
-                header,
-                name,
-                value,
-            };
-
-            pos += entry.entry_size();
-            xattrs.push(entry);
+    /// Parse xattrs from inline inode data
+    fn parse_inline_xattr(inline_data: &[u8]) -> Result<Vec<XAttrEntry>> {
+        if inline_data.len() < XAttrIbodyHeader::SIZE {
+            return Ok(Vec::new());
         }
 
-        xattrs
+        XAttrIbodyHeader::parse(inline_data)?; // Validate magic
+
+        // Entries start after ibody header (offset 4)
+        // e_value_offs is relative to first entry (offset 4)
+        XAttrEntry::parse(
+            inline_data,
+            XAttrIbodyHeader::SIZE, // entries_start = 4
+            XAttrIbodyHeader::SIZE, // value_base = 4 (relative to first entry)
+        )
     }
 
     /// Get the file type from the inode

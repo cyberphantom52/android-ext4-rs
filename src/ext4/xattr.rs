@@ -73,7 +73,7 @@ impl XAttrEntryHeader {
 pub struct XAttrEntry {
     pub header: XAttrEntryHeader,
     pub name: String,
-    pub value: Vec<u8>,
+    pub value: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, NomLE)]
@@ -119,8 +119,54 @@ impl std::fmt::Display for XAttrNameIndex {
 impl XAttrEntry {
     pub const HEADER_SIZE: usize = 16; // Size without the name
 
+    /// Parse xattr entries from raw data
+    ///
+    /// # Arguments
+    /// * `data` - The full data buffer (including any header)
+    /// * `entries_start` - Offset where entries begin (after header)
+    /// * `value_base` - Base offset for e_value_offs calculation
+    ///   - For blocks: 0 (e_value_offs is relative to block start)
+    ///   - For inline: entries_start (e_value_offs is relative to first entry)
+    pub fn parse(data: &[u8], entries_start: usize, value_base: usize) -> Result<Vec<XAttrEntry>> {
+        let mut xattrs = Vec::new();
+        let mut pos = entries_start;
+
+        while pos + Self::HEADER_SIZE <= data.len() {
+            let entry_data = &data[pos..];
+            let header = XAttrEntryHeader::parse(entry_data)?;
+
+            if header.is_end_of_entries() {
+                break;
+            }
+
+            let name = entry_data
+                .get(Self::HEADER_SIZE..Self::HEADER_SIZE + header.name_len as usize)
+                .map(String::from_utf8_lossy)
+                .ok_or_else(|| Ext4Error::Parse("XAttrEntry: name out of bounds".to_string()))?
+                .to_string();
+
+            let mut value = None;
+            if header.value_inum == 0 && header.value_size > 0 {
+                // e_value_offs + value_base gives absolute offset in data
+                let value_start = header.value_offs as usize + value_base;
+                let value_end = value_start + header.value_size as usize;
+                value = data.get(value_start..value_end).map(|v| v.to_vec());
+            }
+
+            let entry = XAttrEntry {
+                header,
+                name,
+                value,
+            };
+            pos += entry.size();
+            xattrs.push(entry);
+        }
+
+        Ok(xattrs)
+    }
+
     /// Get the full size of this entry (header + name, aligned to 4 bytes)
-    pub fn entry_size(&self) -> usize {
+    pub fn size(&self) -> usize {
         let size = Self::HEADER_SIZE + self.name.len();
         // Align to 4 bytes
         (size + 3) & !3
@@ -147,17 +193,17 @@ impl XAttrEntry {
 
     /// Get the SELinux context as a string (without null terminator)
     pub fn selinux_context(&self) -> Option<String> {
-        if self.is_selinux() {
-            // SELinux context is null-terminated
-            let value = if self.value.last() == Some(&0) {
-                &self.value[..self.value.len() - 1]
-            } else {
-                &self.value
-            };
-            Some(String::from_utf8_lossy(value).to_string())
-        } else {
-            None
+        if !self.is_selinux() {
+            return None;
         }
+
+        let trimmed = self
+            .value
+            .as_deref()
+            .map(|v| v.strip_suffix(&[0]))
+            .unwrap_or(self.value.as_deref())?;
+
+        return Some(String::from_utf8_lossy(trimmed).to_string());
     }
 
     /// Parse capability value and return it as a hex string
@@ -194,85 +240,25 @@ impl XAttrEntry {
             }
         }
 
-        if !self.is_capability() || self.value.len() < 20 {
+        if !self.is_capability() || self.value.is_none() {
             return None;
         }
 
-        let cap = VfsCapData::parse(&self.value).ok()?;
+        let cap = VfsCapData::parse(self.value.as_deref().unwrap()).ok()?;
+
         cap.capabilities()
             .map(|caps| format!(" capabilities={:#x}", caps))
     }
 }
 
-fn parse_xattrs(raw_data: &[u8], value_offset_adjustment: isize) -> Result<Vec<XAttrEntry>> {
-    let mut xattrs = Vec::new();
-    let mut pos = 0;
-
-    while pos + XAttrEntry::HEADER_SIZE <= raw_data.len() {
-        let header = XAttrEntryHeader::parse(&raw_data[pos..])?;
-
-        if header.is_end_of_entries() {
-            break;
-        }
-
-        let name = raw_data
-            .get(
-                pos + XAttrEntry::HEADER_SIZE
-                    ..pos + XAttrEntry::HEADER_SIZE + header.name_len as usize,
-            )
-            .map(String::from_utf8_lossy)
-            .ok_or_else(|| Ext4Error::Parse("XAttrEntry: name out of bounds".to_string()))?
-            .to_string();
-
-        let value = if header.value_inum != 0 {
-            // External xattr (stored in another inode) - not supported yet
-            Vec::new()
-        } else if header.value_size > 0 {
-            // Internal xattr - value is in the same data block
-            // Calculate actual offset: e_value_offs + adjustment
-            let actual_offset = (header.value_offs as isize + value_offset_adjustment) as usize;
-            let value_end = actual_offset + header.value_size as usize;
-
-            if actual_offset < raw_data.len() && value_end <= raw_data.len() {
-                raw_data[actual_offset..value_end].to_vec()
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        let entry = XAttrEntry {
-            header,
-            name,
-            value,
-        };
-
-        let entry_size = entry.entry_size();
-        xattrs.push(entry);
-        pos += entry_size;
-    }
-
-    Ok(xattrs)
-}
-
-/// Parse extended attributes from a block
 pub fn parse_xattrs_from_block(block_data: &[u8]) -> Result<Vec<XAttrEntry>> {
-    if block_data.len() < XAttrHeader::SIZE {
-        return Ok(Vec::new());
-    }
+    XAttrHeader::parse(block_data)?; // Validate magic
 
-    // Parse and validate header
-    let _header = XAttrHeader::parse(block_data)?;
-
-    // Entries start after the header, aligned to 4 bytes
-    let entries_start = (XAttrHeader::SIZE + 3) & !3;
-
-    if entries_start >= block_data.len() {
-        return Ok(Vec::new());
-    }
-
-    // For block xattrs, value_offs is relative to the start of the block
-    // So we pass negative entries_start as adjustment
-    parse_xattrs(&block_data[entries_start..], -(entries_start as isize))
+    // Entries start after header (offset 32)
+    // e_value_offs is relative to block start (offset 0)
+    XAttrEntry::parse(
+        block_data,
+        XAttrHeader::SIZE, // entries_start = 32
+        0,                 // value_base = 0 (relative to block start)
+    )
 }
