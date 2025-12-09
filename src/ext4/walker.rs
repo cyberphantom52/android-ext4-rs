@@ -3,7 +3,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{DirectoryEntry, Inode, Result, Volume, ext4::directory::Directory};
+use crate::{
+    DirectoryEntry, Inode, Result, Volume,
+    ext4::{
+        directory::Directory,
+        inode::{FileType, Mode},
+    },
+};
 
 /// A walker for recursive directory traversal
 pub struct DirectoryWalker<'a, R: Read + Seek> {
@@ -16,28 +22,77 @@ struct WalkEntry {
     entries: Vec<DirectoryEntry>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EntryAttributes {
+    mode: Mode,
+    uid: u32,
+    gid: u32,
+    selinux: Option<String>,
+    capabilities: Option<String>,
+}
+
+impl EntryAttributes {
+    /// Get the mode of the entry
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Get the user ID of the entry
+    pub fn uid(&self) -> u32 {
+        self.uid
+    }
+
+    /// Get the group ID of the entry
+    pub fn gid(&self) -> u32 {
+        self.gid
+    }
+
+    /// Get the SELinux context of the entry, if available
+    pub fn selinux(&self) -> Option<&str> {
+        self.selinux.as_deref()
+    }
+
+    /// Get the capabilities of the entry, if available
+    pub fn capabilities(&self) -> Option<&str> {
+        self.capabilities.as_deref()
+    }
+
+    pub fn mode_string(&self) -> String {
+        format!("{:04o}", self.mode)
+    }
+
+    pub fn mode_with_caps(&self) -> String {
+        match &self.capabilities {
+            Some(cap) => format!("{:04o}{}", self.mode, cap),
+            None => self.mode_string(),
+        }
+    }
+}
+
 /// An item returned by the directory walker
 #[derive(Debug, Clone)]
 pub struct WalkItem {
-    pub path: PathBuf,
-    pub entry: DirectoryEntry,
-    pub inode: Inode,
+    path: PathBuf,
+    entry: DirectoryEntry,
+    inode: Inode,
+    attributes: EntryAttributes,
 }
 
 impl WalkItem {
-    /// Check if this item is a directory
-    pub fn is_directory(&self) -> bool {
-        self.inode.is_directory()
+    pub fn inode(&self) -> &Inode {
+        &self.inode
     }
 
-    /// Check if this item is a regular file
-    pub fn is_file(&self) -> bool {
-        self.inode.is_regular_file()
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
-    /// Check if this item is a symbolic link
-    pub fn is_symlink(&self) -> bool {
-        self.inode.is_symlink()
+    pub fn attributes(&self) -> &EntryAttributes {
+        &self.attributes
+    }
+
+    pub fn r#type(&self) -> FileType {
+        self.inode.file_type().expect("Invalid file type in inode")
     }
 
     /// Get the name of this entry
@@ -108,10 +163,20 @@ impl<'a, R: Read + Seek> Iterator for DirectoryWalker<'a, R> {
                 }
             }
 
+            let xattrs = self.volume.read_xattrs(&inode).unwrap_or_default();
+            let attributes = EntryAttributes {
+                mode: inode.mode(),
+                uid: inode.uid(),
+                gid: inode.gid(),
+                selinux: xattrs.iter().find_map(|x| x.selinux_context()),
+                capabilities: xattrs.iter().find_map(|x| x.capability_string()),
+            };
+
             return Some(Ok(WalkItem {
                 path: item_path,
                 entry,
                 inode,
+                attributes,
             }));
         }
 
