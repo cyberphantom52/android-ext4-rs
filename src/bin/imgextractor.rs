@@ -34,6 +34,16 @@ struct Arguments {
     /// Suppress progress bars
     #[arg(short, long)]
     quiet: bool,
+
+    /// Number of threads to use for extraction (defaults to num_cpus / 4)
+    #[arg(short = 't', long, default_value_t = num_cpus())]
+    num_threads: usize,
+}
+
+fn num_cpus() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().div_ceil(4))
+        .unwrap_or(1)
 }
 
 fn default_output_path() -> PathBuf {
@@ -269,6 +279,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             io::ErrorKind::NotFound,
             format!("Image file not found: {}", args.image.display()),
         )));
+    }
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.num_threads)
+        .build_global()
+        .unwrap();
+
+    if !args.quiet {
+        eprintln!("Using {} threads for extraction", args.num_threads);
     }
 
     let file = File::open(&args.image)?;
