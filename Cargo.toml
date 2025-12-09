@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 bitflags = "2.10.0"
-clap = {version = "4.5.53", features = ["derive"] }
+clap = {version = "4.5.53", features = ["derive", "string"] }
 indicatif = "0.18.3"
 nom = "7.1"
 nom-derive = "0.10.1"
