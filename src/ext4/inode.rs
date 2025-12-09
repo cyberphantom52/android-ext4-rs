@@ -224,9 +224,21 @@ bitflags! {
 }
 
 impl Mode {
+    const PERM_MASK: u16 = 0o7777;
+
     pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
         let (input, bits) = nom::number::complete::le_u16(input)?;
         Ok((input, Self::from_bits_truncate(bits)))
+    }
+
+    /// Get only the permission bits (owner/group/other + setuid/setgid/sticky)
+    pub fn permissions(&self) -> u16 {
+        self.bits() & Self::PERM_MASK
+    }
+
+    /// Get the permission bits as an octal string (e.g., "0755")
+    pub fn permissions_string(&self) -> String {
+        format!("{:04o}", self.permissions())
     }
 }
 

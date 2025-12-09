@@ -58,12 +58,12 @@ impl EntryAttributes {
     }
 
     pub fn mode_string(&self) -> String {
-        format!("{:04o}", self.mode)
+        self.mode.permissions_string()
     }
 
     pub fn mode_with_caps(&self) -> String {
         match &self.capabilities {
-            Some(cap) => format!("{:04o}{}", self.mode, cap),
+            Some(cap) => format!("{}{}", self.mode.permissions_string(), cap),
             None => self.mode_string(),
         }
     }
