@@ -207,7 +207,9 @@ impl Superblock {
     }
 
     pub fn volume_name(&self) -> String {
-        String::from_utf8_lossy(&self.volume_name).to_string()
+        String::from_utf8_lossy(&self.volume_name)
+            .trim_end_matches('\0')
+            .to_string()
     }
 }
 

@@ -422,11 +422,15 @@ impl<R: Read + Seek> Volume<R> {
                 .flat_map(|&word| word.to_le_bytes())
                 .take(file_size as usize)
                 .collect();
-            Ok(String::from_utf8_lossy(&link_data).to_string())
+            Ok(String::from_utf8_lossy(&link_data)
+                .trim_end_matches('\0')
+                .to_string())
         } else {
             // Slow symlink - stored in blocks
             let data = self.read_inode_data(inode, 0, file_size as usize)?;
-            Ok(String::from_utf8_lossy(&data).to_string())
+            Ok(String::from_utf8_lossy(&data)
+                .trim_end_matches('\0')
+                .to_string())
         }
     }
 }
