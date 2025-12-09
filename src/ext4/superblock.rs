@@ -205,6 +205,10 @@ impl Superblock {
     pub fn inode_size(&self) -> u64 {
         self.inode_size as u64
     }
+
+    pub fn volume_name(&self) -> String {
+        String::from_utf8_lossy(&self.volume_name).to_string()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NomLE)]

@@ -44,6 +44,11 @@ impl<R: Read + Seek> Volume<R> {
         })
     }
 
+    /// Get the volume name
+    pub fn name(&self) -> String {
+        self.superblock.volume_name()
+    }
+
     /// Get the superblock
     pub fn superblock(&self) -> &Superblock {
         &self.superblock
