@@ -1,9 +1,11 @@
-use android_ext4::{DirectoryWalker, FileType, Volume, WalkItem};
+use android_ext4::{DirectoryWalker, EntryAttributes, FileType, Volume, WalkItem};
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressBar;
+use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -55,17 +57,17 @@ fn default_output_path() -> PathBuf {
 }
 
 /// Main extractor
-struct Extractor<R: Read + Seek> {
-    volume: Volume<R>,
+struct Extractor<F: Fn() -> BufReader<File> + Sync + Send> {
+    volume: Volume<BufReader<File>, F>,
     arguments: Arguments,
     mount_name: String,
     fsconfig: BufWriter<File>,
     contexts: BufWriter<File>,
 }
 
-impl<R: Read + Seek> Extractor<R> {
-    fn new(reader: R, arguments: Arguments) -> io::Result<Self> {
-        let volume = Volume::new(reader)
+impl<F: Fn() -> BufReader<File> + Sync + Send> Extractor<F> {
+    fn new(reader_factory: F, arguments: Arguments) -> io::Result<Self> {
+        let volume = Volume::new(reader_factory)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
         let mount_name = volume.name().unwrap_or(
             arguments
@@ -119,11 +121,6 @@ impl<R: Read + Seek> Extractor<R> {
         }
 
         let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg}")
-                .unwrap(),
-        );
         pb.set_message(msg.to_string());
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
         pb
@@ -137,23 +134,60 @@ impl<R: Read + Seek> Extractor<R> {
         let spinner = self.create_spinner("Scanning filesystem...");
 
         // Collect all entries first
-        let items: Vec<WalkItem> = DirectoryWalker::from_path(&mut self.volume, "/")
+        let items: Vec<WalkItem> = DirectoryWalker::from_path(&self.volume, "/")
             .map_err(|e| io::Error::other(format!("Walker error: {}", e)))?
+            .par_bridge()
             .filter_map(Result::ok)
             .collect();
 
         spinner.finish_with_message(format!("Found {} entries", items.len()));
 
+        // Process entries
+        let pb = self.create_progress_bar(items.len() as u64, "Extracting");
+
+        let attributes: Vec<(PathBuf, EntryAttributes)> = items
+            .into_par_iter()
+            .filter_map(|item| {
+                pb.inc(1);
+                self.process_item(&item).ok()
+            })
+            .collect();
+
         // Add root entries
         writeln!(self.fsconfig, "/ 0 0 0755")?;
         writeln!(self.fsconfig, "{} 0 0 0755", self.mount_name)?;
 
-        // Process entries
-        let pb = self.create_progress_bar(items.len() as u64, "Extracting");
+        for (path, attr) in attributes {
+            let fs_path = format!("{}{}", self.mount_name, path.display());
+            let escaped = escape_regex(&fs_path);
 
-        for item in &items {
-            self.process_item(&item)?;
-            pb.inc(1);
+            // fs_config
+            writeln!(
+                self.fsconfig,
+                "{} {} {} {}",
+                fs_path,
+                attr.uid(),
+                attr.gid(),
+                attr.mode_with_caps()
+            )?;
+
+            // SELinux contexts
+            if let Some(selabel) = attr.selinux() {
+                writeln!(self.contexts, "/{} {}", escaped, selabel)?;
+                // directory
+                if matches!(attr.mode().file_type(), Some(FileType::Directory)) {
+                    writeln!(self.contexts, "/{}(/.*)? {}", escaped, selabel)?;
+                }
+            }
+
+            // System-as-Root (SAR)
+            if matches!(attr.mode().file_type(), Some(FileType::RegularFile))
+                && path.to_string_lossy().contains("/system/build.prop")
+            {
+                let dir_escaped = escape_regex(&self.mount_name);
+                writeln!(self.contexts, "/{} u:object_r:rootfs:s0", dir_escaped)?;
+                writeln!(self.contexts, "/{}(/.*)? u:object_r:rootfs:s0", dir_escaped)?;
+            }
         }
 
         self.fsconfig.flush()?;
@@ -169,22 +203,10 @@ impl<R: Read + Seek> Extractor<R> {
         Ok(())
     }
 
-    fn process_item(&mut self, item: &WalkItem) -> io::Result<()> {
+    fn process_item(&self, item: &WalkItem) -> io::Result<(PathBuf, EntryAttributes)> {
         let path = item.path();
-        let meta = item.attributes();
-
-        // Detect System-as-Root (SAR) and write context entries
-        if matches!(item.r#type(), FileType::RegularFile)
-            && path.to_string_lossy().contains("/system/build.prop")
-        {
-            let dir_escaped = escape_regex(&self.mount_name);
-            writeln!(self.contexts, "/{} u:object_r:rootfs:s0", dir_escaped)?;
-            writeln!(self.contexts, "/{}(/.*)? u:object_r:rootfs:s0", dir_escaped)?;
-        }
 
         let extract_dir = self.extract_dir();
-        let fs_path = format!("{}{}", self.mount_name, path.display());
-        let escaped = escape_regex(&fs_path);
         let target = extract_dir.join(path.strip_prefix("/").unwrap_or(path));
 
         if let Some(parent) = target.parent() {
@@ -195,7 +217,7 @@ impl<R: Read + Seek> Extractor<R> {
 
         match item.r#type() {
             FileType::RegularFile => {
-                let mut file = File::create(target)?;
+                let mut file = File::create(&target)?;
                 let mut file_reader = self.volume.open_file(item.path()).map_err(|e| {
                     io::Error::new(
                         io::ErrorKind::Other,
@@ -204,38 +226,34 @@ impl<R: Read + Seek> Extractor<R> {
                 })?;
                 io::copy(&mut file_reader, &mut file)?;
             }
-            FileType::Directory => {
-                fs::create_dir_all(target)?;
-                if let Some(selabel) = meta.selinux() {
-                    writeln!(self.contexts, "/{}(/.*)? {}", escaped, selabel)?;
-                }
-            }
             FileType::SymbolicLink => {
-                let link_target = self.volume.read_symlink(item.inode()).ok();
+                let mut file_reader = self.volume.open_file(item.path()).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Failed to read symlink {}: {}", item.path().display(), e),
+                    )
+                })?;
+
+                let mut link_target = String::new();
+                file_reader.read_to_string(&mut link_target).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!(
+                            "Failed to read symlink target {}: {}",
+                            item.path().display(),
+                            e
+                        ),
+                    )
+                })?;
 
                 let _ = fs::remove_file(&target);
-
-                if let Some(link) = link_target {
-                    Self::create_symlink(&link, &target);
-                }
+                Self::create_symlink(&link_target, &target);
             }
+            FileType::Directory => fs::create_dir_all(&target)?,
             _ => {}
         }
 
-        let mode = meta.mode_with_caps();
-        writeln!(
-            self.fsconfig,
-            "{} {} {} {}",
-            fs_path,
-            meta.uid(),
-            meta.gid(),
-            mode
-        )?;
-        if let Some(selabel) = meta.selinux() {
-            writeln!(self.contexts, "/{} {}", escaped, selabel)?;
-        }
-
-        Ok(())
+        Ok((item.path().to_owned(), item.attributes().clone()))
     }
 
     #[cfg(unix)]
@@ -290,9 +308,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Using {} threads for extraction", args.num_threads);
     }
 
-    let file = File::open(&args.image)?;
+    // Create an Arc-wrapped path for the reader factory
+    let image_path = Arc::new(args.image.clone());
 
-    Extractor::new(BufReader::new(file), args)?.run()?;
+    Extractor::new(
+        move || {
+            let file = File::open(image_path.as_ref()).expect("Failed to open image file");
+            BufReader::new(file)
+        },
+        args,
+    )?
+    .run()?;
 
     Ok(())
 }
