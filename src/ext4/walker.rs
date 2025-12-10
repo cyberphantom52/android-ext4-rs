@@ -3,17 +3,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{
-    DirectoryEntry, Inode, Result, Volume,
-    ext4::{
-        directory::Directory,
-        inode::{FileType, Mode},
-    },
+use crate::ext4::{
+    DirectoryEntry, Result, Volume,
+    directory::Directory,
+    inode::{FileType, Inode, Mode},
+    inode_reader::InodeReader,
 };
 
 /// A walker for recursive directory traversal
-pub struct DirectoryWalker<'a, R: Read + Seek> {
-    volume: &'a mut Volume<R>,
+pub struct DirectoryWalker<R: Read + Seek, F: Fn() -> R> {
+    volume: Volume<R, F>,
     stack: Vec<WalkEntry>,
 }
 
@@ -101,8 +100,8 @@ impl WalkItem {
     }
 }
 
-impl<'a, R: Read + Seek> DirectoryWalker<'a, R> {
-    pub(crate) fn new(directory: Directory<'a, R>) -> Self {
+impl<R: Read + Seek, F: Fn() -> R> DirectoryWalker<R, F> {
+    pub(crate) fn new(directory: Directory<R, F>) -> Self {
         let entries = directory.entries().to_vec();
 
         Self {
@@ -115,7 +114,7 @@ impl<'a, R: Read + Seek> DirectoryWalker<'a, R> {
     }
 
     /// Create a walker starting from a specific path
-    pub fn from_path(volume: &'a mut Volume<R>, path: impl AsRef<Path>) -> Result<Self> {
+    pub fn from_path(volume: &Volume<R, F>, path: impl AsRef<Path>) -> Result<Self> {
         let inode = volume.lookup_path(&path)?;
         let directory = Directory::new(volume, inode)?;
         Ok(Self::new(directory))
@@ -126,7 +125,7 @@ impl<'a, R: Read + Seek> DirectoryWalker<'a, R> {
     }
 }
 
-impl<'a, R: Read + Seek> Iterator for DirectoryWalker<'a, R> {
+impl<R: Read + Seek, F: Fn() -> R> Iterator for DirectoryWalker<R, F> {
     type Item = Result<WalkItem>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -152,13 +151,17 @@ impl<'a, R: Read + Seek> Iterator for DirectoryWalker<'a, R> {
             };
 
             if inode.is_directory() {
-                match self.volume.read_directory_entries(&inode) {
-                    Ok(entries) => {
-                        self.stack.push(WalkEntry {
-                            path: item_path.clone(),
-                            entries,
-                        });
-                    }
+                let mut reader = InodeReader::new(&self.volume, inode.clone());
+                match reader.read_all() {
+                    Ok(data) => match Volume::<R, F>::parse_directory_entries(&data) {
+                        Ok(entries) => {
+                            self.stack.push(WalkEntry {
+                                path: item_path.clone(),
+                                entries,
+                            });
+                        }
+                        Err(e) => return Some(Err(e)),
+                    },
                     Err(e) => return Some(Err(e)),
                 }
             }

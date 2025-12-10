@@ -142,6 +142,11 @@ impl Inode {
         matches!(self.file_type(), Some(FileType::SymbolicLink))
     }
 
+    /// Check if this inode is a fast symlink (data stored inline in block pointers)
+    pub fn is_fast_symlink(&self) -> bool {
+        self.is_symlink() && self.size() < Self::FAST_SYMLINK_MAX_SIZE
+    }
+
     /// Check if this inode uses extents
     pub fn uses_extents(&self) -> bool {
         self.flags.contains(Flags::Extents)

@@ -1,28 +1,30 @@
 use std::io::{Read, Seek};
 
 use crate::{
-    DirectoryWalker,
-    ext4::{DirectoryEntry, Ext4Error, Inode, Result, Volume},
+    DirectoryWalker, Ext4Error, Result, Volume,
+    ext4::{DirectoryEntry, InodeReader, inode::Inode},
 };
 
 /// Represents a directory in the ext4 filesystem
-pub struct Directory<'a, R: Read + Seek> {
-    pub(crate) volume: &'a mut Volume<R>,
+pub struct Directory<R: Read + Seek, F: Fn() -> R> {
+    pub(crate) volume: Volume<R, F>,
     inode: Inode,
     entries: Vec<DirectoryEntry>,
 }
 
-impl<'a, R: Read + Seek> Directory<'a, R> {
+impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
     /// Create a new Directory from a volume and inode
-    pub(crate) fn new(volume: &'a mut Volume<R>, inode: Inode) -> Result<Self> {
+    pub(crate) fn new(volume: &Volume<R, F>, inode: Inode) -> Result<Self> {
         if !inode.is_directory() {
             return Err(Ext4Error::NotADirectory);
         }
 
-        let entries = volume.read_directory_entries(&inode)?;
+        let mut reader = InodeReader::new(volume, inode.clone());
+        let data = reader.read_all()?;
+        let entries = Volume::<R, F>::parse_directory_entries(&data)?;
 
         Ok(Self {
-            volume,
+            volume: volume.clone(),
             inode,
             entries,
         })
@@ -39,7 +41,7 @@ impl<'a, R: Read + Seek> Directory<'a, R> {
     }
 
     /// Create a walker for recursive directory traversal
-    pub fn walk(self) -> DirectoryWalker<'a, R> {
+    pub fn walk(self) -> DirectoryWalker<R, F> {
         DirectoryWalker::new(self)
     }
 
@@ -48,7 +50,7 @@ impl<'a, R: Read + Seek> Directory<'a, R> {
     }
 }
 
-impl<'a, R: Read + Seek> IntoIterator for Directory<'a, R> {
+impl<R: Read + Seek, F: Fn() -> R> IntoIterator for Directory<R, F> {
     type Item = DirectoryEntry;
     type IntoIter = std::vec::IntoIter<DirectoryEntry>;
 

@@ -3,19 +3,18 @@ mod directory;
 mod extent;
 mod file;
 mod inode;
+mod inode_reader;
 mod superblock;
 mod volume;
 mod walker;
 mod xattr;
 
-pub use block::BlockGroupDescriptor;
-pub use extent::{Extent, ExtentHeader, ExtentIndex};
+pub use directory::Directory;
 pub use file::File;
-pub use inode::{FileType, Inode, Linux2};
-pub use superblock::Superblock;
+pub use inode::FileType;
+use inode_reader::InodeReader;
 pub use volume::Volume;
 pub use walker::{DirectoryWalker, WalkItem};
-pub use xattr::XAttrEntry;
 
 use thiserror::Error;
 
