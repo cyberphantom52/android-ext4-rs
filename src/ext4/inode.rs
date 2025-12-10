@@ -3,7 +3,7 @@ use nom::Finish;
 use nom_derive::{NomLE, Parse};
 
 use crate::{
-    Ext4Error, Result,
+    Error, ParseContext, Result,
     ext4::xattr::{XAttrEntry, XAttrIbodyHeader},
 };
 
@@ -72,7 +72,7 @@ impl Inode {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let mut inode: Inode = match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => descriptor,
-            Err(e) => return Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => return Err(Error::nom_parse(ParseContext::Inode, e)),
         };
 
         if inode.extra_isize > 0 {
@@ -80,10 +80,16 @@ impl Inode {
             let inode_size = bytes.len();
 
             let inline_data = bytes.get(start_offset..inode_size).ok_or_else(|| {
-                Ext4Error::Parse("Inode extra size exceeds available data".to_string())
+                Error::invalid_data(
+                    ParseContext::Inode,
+                    format!(
+                        "extra_isize ({}) exceeds available data (inode size: {})",
+                        inode.extra_isize, inode_size
+                    ),
+                )
             })?;
 
-            inode.inline_xattrs = Self::parse_inline_xattr(&inline_data)?;
+            inode.inline_xattrs = Self::parse_inline_xattr(inline_data)?;
         }
 
         Ok(inode)
@@ -122,24 +128,24 @@ impl Inode {
         ((self.osd2.gid_high as u32) << 16) | (self.gid as u32)
     }
 
-    /// Get the file type from the inode
-    pub fn file_type(&self) -> Option<FileType> {
-        FileType::from_mode(self.mode.bits())
-    }
-
     /// Check if this is a directory
     pub fn is_directory(&self) -> bool {
-        matches!(self.file_type(), Some(FileType::Directory))
+        matches!(self.mode.file_type(), Some(FileType::Directory))
     }
 
     /// Check if this is a regular file
     pub fn is_regular_file(&self) -> bool {
-        matches!(self.file_type(), Some(FileType::RegularFile))
+        matches!(self.mode.file_type(), Some(FileType::RegularFile))
     }
 
     /// Check if this is a symbolic link
     pub fn is_symlink(&self) -> bool {
-        matches!(self.file_type(), Some(FileType::SymbolicLink))
+        matches!(self.mode.file_type(), Some(FileType::SymbolicLink))
+    }
+
+    /// Check if this inode is a fast symlink (data stored inline in block pointers)
+    pub fn is_fast_symlink(&self) -> bool {
+        self.is_symlink() && self.size() < Self::FAST_SYMLINK_MAX_SIZE
     }
 
     /// Check if this inode uses extents
@@ -240,6 +246,11 @@ impl Mode {
     pub fn permissions_string(&self) -> String {
         format!("{:04o}", self.permissions())
     }
+
+    /// Get the file type from the inode
+    pub fn file_type(&self) -> Option<FileType> {
+        FileType::from_mode(self.bits())
+    }
 }
 
 bitflags! {
@@ -306,13 +317,4 @@ pub struct Linux2 {
     pub gid_high: u16,
     pub checksum_lo: u16,
     pub reserved: u16,
-}
-
-impl Linux2 {
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
-        match Parse::parse(bytes).finish() {
-            Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
-        }
-    }
 }

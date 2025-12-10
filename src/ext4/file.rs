@@ -1,25 +1,34 @@
 use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
-use crate::ext4::{Ext4Error, Inode, Result, Volume};
+use crate::{Error, Result, Volume, ext4::InodeReader, ext4::inode::Inode};
 
 /// Represents a file in the ext4 filesystem
-pub struct File<'a, R: Read + Seek> {
-    volume: &'a mut Volume<R>,
+pub struct File<R: Read + Seek> {
+    reader: InodeReader<R>,
     inode: Inode,
     position: u64,
+    path: PathBuf,
 }
 
-impl<'a, R: Read + Seek> File<'a, R> {
-    /// Create a new File from a volume and inode
-    pub(crate) fn new(volume: &'a mut Volume<R>, inode: Inode) -> Result<Self> {
-        if !inode.is_regular_file() {
-            return Err(Ext4Error::InvalidPath("Not a regular file".to_string()));
+impl<R: Read + Seek> File<R> {
+    /// Create a new File from a volume, inode, and path
+    /// Accepts regular files and symlinks
+    pub(crate) fn new<F: Fn() -> R>(
+        volume: &Volume<R, F>,
+        inode: Inode,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        let path = path.into();
+        if !inode.is_regular_file() && !inode.is_symlink() {
+            return Err(Error::NotAFile(format!("{}", path.display())));
         }
 
         Ok(Self {
-            volume,
+            reader: InodeReader::new(volume),
             inode,
             position: 0,
+            path,
         })
     }
 
@@ -38,15 +47,24 @@ impl<'a, R: Read + Seek> File<'a, R> {
         &self.inode
     }
 
+    /// Check if this file is a symlink
+    pub fn is_symlink(&self) -> bool {
+        self.inode().is_symlink()
+    }
+
+    /// Get the path of this file
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Read all contents of the file
     pub fn read_all(&mut self) -> Result<Vec<u8>> {
         self.position = 0;
-        self.volume
-            .read_inode_data(&self.inode, 0, self.size() as usize)
+        self.reader.read_all(&self.inode)
     }
 }
 
-impl<'a, R: Read + Seek> Read for File<'a, R> {
+impl<R: Read + Seek> Read for File<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.position >= self.size() {
             return Ok(0); // EOF
@@ -55,9 +73,9 @@ impl<'a, R: Read + Seek> Read for File<'a, R> {
         let to_read = std::cmp::min(buf.len(), (self.size() - self.position) as usize);
 
         let data = self
-            .volume
-            .read_inode_data(&self.inode, self.position, to_read)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .reader
+            .read_data(&self.inode, self.position, to_read)
+            .map_err(std::io::Error::other)?;
 
         let bytes_read = data.len();
         buf[..bytes_read].copy_from_slice(&data);
@@ -67,7 +85,7 @@ impl<'a, R: Read + Seek> Read for File<'a, R> {
     }
 }
 
-impl<'a, R: Read + Seek> Seek for File<'a, R> {
+impl<R: Read + Seek> Seek for File<R> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset as i64,

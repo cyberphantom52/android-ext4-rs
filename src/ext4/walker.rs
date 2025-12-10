@@ -3,23 +3,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{
-    DirectoryEntry, Inode, Result, Volume,
-    ext4::{
-        directory::Directory,
-        inode::{FileType, Mode},
-    },
+use crate::ext4::{
+    DirectoryEntry, Result, Volume,
+    directory::Directory,
+    inode::{FileType, Inode, Mode},
+    inode_reader::InodeReader,
 };
 
 /// A walker for recursive directory traversal
-pub struct DirectoryWalker<'a, R: Read + Seek> {
-    volume: &'a mut Volume<R>,
-    stack: Vec<WalkEntry>,
-}
-
-struct WalkEntry {
-    path: PathBuf,
-    entries: Vec<DirectoryEntry>,
+pub struct DirectoryWalker<R: Read + Seek, F: Fn() -> R> {
+    stack: Vec<Directory<R, F>>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +85,10 @@ impl WalkItem {
     }
 
     pub fn r#type(&self) -> FileType {
-        self.inode.file_type().expect("Invalid file type in inode")
+        self.inode
+            .mode()
+            .file_type()
+            .expect("Invalid file type in inode")
     }
 
     /// Get the name of this entry
@@ -101,37 +97,28 @@ impl WalkItem {
     }
 }
 
-impl<'a, R: Read + Seek> DirectoryWalker<'a, R> {
-    pub(crate) fn new(directory: Directory<'a, R>) -> Self {
-        let entries = directory.entries().to_vec();
-
-        Self {
-            volume: directory.volume,
-            stack: vec![WalkEntry {
-                path: PathBuf::from("/"),
-                entries,
-            }],
-        }
+impl<R: Read + Seek, F: Fn() -> R> DirectoryWalker<R, F> {
+    pub(crate) fn new(dir: Directory<R, F>) -> Self {
+        Self { stack: vec![dir] }
     }
 
     /// Create a walker starting from a specific path
-    pub fn from_path(volume: &'a mut Volume<R>, path: impl AsRef<Path>) -> Result<Self> {
-        let inode = volume.lookup_path(&path)?;
-        let directory = Directory::new(volume, inode)?;
+    pub fn from_path(volume: &Volume<R, F>, path: impl AsRef<Path>) -> Result<Self> {
+        let directory = volume.open_dir(&path)?;
         Ok(Self::new(directory))
     }
 
     pub fn current_path(&self) -> Option<&Path> {
-        self.stack.last().map(|frame| frame.path.as_path())
+        self.stack.last().map(|frame| frame.path())
     }
 }
 
-impl<'a, R: Read + Seek> Iterator for DirectoryWalker<'a, R> {
+impl<R: Read + Seek, F: Fn() -> R> Iterator for DirectoryWalker<R, F> {
     type Item = Result<WalkItem>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(current) = self.stack.last_mut() {
-            let entry = match current.entries.pop() {
+            let entry = match current.entries_mut().pop() {
                 Some(e) => e,
                 None => {
                     self.stack.pop();
@@ -144,26 +131,17 @@ impl<'a, R: Read + Seek> Iterator for DirectoryWalker<'a, R> {
                 continue;
             }
 
-            let item_path = current.path.join(entry_name);
+            let item_path = current.path().join(entry_name);
 
-            let inode = match self.volume.read_inode(entry.inode) {
+            let inode = match current.volume.read_inode(entry.inode) {
                 Ok(inode) => inode,
                 Err(e) => return Some(Err(e)),
             };
 
-            if inode.is_directory() {
-                match self.volume.read_directory_entries(&inode) {
-                    Ok(entries) => {
-                        self.stack.push(WalkEntry {
-                            path: item_path.clone(),
-                            entries,
-                        });
-                    }
-                    Err(e) => return Some(Err(e)),
-                }
-            }
+            let xattrs = InodeReader::new(&current.volume)
+                .read_xattrs(&inode)
+                .unwrap_or_default();
 
-            let xattrs = self.volume.read_xattrs(&inode).unwrap_or_default();
             let attributes = EntryAttributes {
                 mode: inode.mode(),
                 uid: inode.uid(),
@@ -171,6 +149,15 @@ impl<'a, R: Read + Seek> Iterator for DirectoryWalker<'a, R> {
                 selinux: xattrs.iter().find_map(|x| x.selinux_context()),
                 capabilities: xattrs.iter().find_map(|x| x.capability_string()),
             };
+
+            if inode.is_directory() {
+                match Directory::new(&current.volume, inode.clone(), &item_path) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(directory) => {
+                        self.stack.push(directory);
+                    }
+                }
+            }
 
             return Some(Ok(WalkItem {
                 path: item_path,
