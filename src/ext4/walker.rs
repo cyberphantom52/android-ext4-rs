@@ -12,13 +12,7 @@ use crate::ext4::{
 
 /// A walker for recursive directory traversal
 pub struct DirectoryWalker<R: Read + Seek, F: Fn() -> R> {
-    volume: Volume<R, F>,
-    stack: Vec<WalkEntry>,
-}
-
-struct WalkEntry {
-    path: PathBuf,
-    entries: Vec<DirectoryEntry>,
+    stack: Vec<Directory<R, F>>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,14 +98,8 @@ impl WalkItem {
 }
 
 impl<R: Read + Seek, F: Fn() -> R> DirectoryWalker<R, F> {
-    pub(crate) fn new(directory: Directory<R, F>) -> Self {
-        let entries = directory.entries().unwrap_or_default();
-        let path = directory.path().to_path_buf();
-
-        Self {
-            volume: directory.volume,
-            stack: vec![WalkEntry { path, entries }],
-        }
+    pub(crate) fn new(dir: Directory<R, F>) -> Self {
+        Self { stack: vec![dir] }
     }
 
     /// Create a walker starting from a specific path
@@ -121,7 +109,7 @@ impl<R: Read + Seek, F: Fn() -> R> DirectoryWalker<R, F> {
     }
 
     pub fn current_path(&self) -> Option<&Path> {
-        self.stack.last().map(|frame| frame.path.as_path())
+        self.stack.last().map(|frame| frame.path())
     }
 }
 
@@ -130,7 +118,7 @@ impl<R: Read + Seek, F: Fn() -> R> Iterator for DirectoryWalker<R, F> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(current) = self.stack.last_mut() {
-            let entry = match current.entries.pop() {
+            let entry = match current.entries_mut().pop() {
                 Some(e) => e,
                 None => {
                     self.stack.pop();
@@ -143,31 +131,17 @@ impl<R: Read + Seek, F: Fn() -> R> Iterator for DirectoryWalker<R, F> {
                 continue;
             }
 
-            let item_path = current.path.join(entry_name);
+            let item_path = current.path().join(entry_name);
 
-            let inode = match self.volume.read_inode(entry.inode) {
+            let inode = match current.volume.read_inode(entry.inode) {
                 Ok(inode) => inode,
                 Err(e) => return Some(Err(e)),
             };
 
-            if inode.is_directory() {
-                match Directory::new(&self.volume, inode.clone(), &item_path) {
-                    Err(e) => return Some(Err(e)),
-                    Ok(directory) => match directory.entries() {
-                        Err(e) => return Some(Err(e)),
-                        Ok(entries) => {
-                            self.stack.push(WalkEntry {
-                                path: directory.path().to_path_buf(),
-                                entries,
-                            });
-                        }
-                    },
-                }
-            }
-
-            let xattrs = InodeReader::new(&self.volume)
+            let xattrs = InodeReader::new(&current.volume)
                 .read_xattrs(&inode)
                 .unwrap_or_default();
+
             let attributes = EntryAttributes {
                 mode: inode.mode(),
                 uid: inode.uid(),
@@ -175,6 +149,15 @@ impl<R: Read + Seek, F: Fn() -> R> Iterator for DirectoryWalker<R, F> {
                 selinux: xattrs.iter().find_map(|x| x.selinux_context()),
                 capabilities: xattrs.iter().find_map(|x| x.capability_string()),
             };
+
+            if inode.is_directory() {
+                match Directory::new(&current.volume, inode.clone(), &item_path) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(directory) => {
+                        self.stack.push(directory);
+                    }
+                }
+            }
 
             return Some(Ok(WalkItem {
                 path: item_path,

@@ -11,6 +11,7 @@ pub struct Directory<R: Read + Seek, F: Fn() -> R> {
     pub(crate) volume: Volume<R, F>,
     path: PathBuf,
     inode: Inode,
+    entries: Vec<DirectoryEntry>,
 }
 
 impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
@@ -25,10 +26,13 @@ impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
             return Err(Error::NotADirectory(format!("{}", path.display())));
         }
 
+        let entries = Self::parse_entries(volume, &inode)?;
+
         Ok(Self {
             volume: volume.clone(),
             path,
             inode,
+            entries,
         })
     }
 
@@ -42,9 +46,17 @@ impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
         &self.path
     }
 
+    pub fn entries(&self) -> &[DirectoryEntry] {
+        &self.entries
+    }
+
+    pub fn entries_mut(&mut self) -> &mut Vec<DirectoryEntry> {
+        &mut self.entries
+    }
+
     /// Parse directory entries from raw data
-    pub fn entries(&self) -> Result<Vec<DirectoryEntry>> {
-        let data = InodeReader::new(&self.volume).read_all(&self.inode)?;
+    fn parse_entries(volume: &Volume<R, F>, inode: &Inode) -> Result<Vec<DirectoryEntry>> {
+        let data = InodeReader::new(volume).read_all(inode)?;
         let mut entries = Vec::new();
         let mut offset = 0;
 
@@ -98,9 +110,8 @@ impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
         DirectoryWalker::new(self)
     }
 
-    pub fn find(&self, name: &str) -> Option<DirectoryEntry> {
+    pub fn find(&self, name: &str) -> Option<&DirectoryEntry> {
         self.entries()
-            .ok()?
             .into_iter()
             .find(|entry| entry.name_str() == name)
     }
@@ -111,6 +122,6 @@ impl<R: Read + Seek, F: Fn() -> R> IntoIterator for Directory<R, F> {
     type IntoIter = std::vec::IntoIter<DirectoryEntry>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.entries().unwrap_or_default().into_iter()
+        self.entries.into_iter()
     }
 }
