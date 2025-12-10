@@ -1,26 +1,32 @@
 use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
-use crate::{Ext4Error, Result, Volume, ext4::InodeReader, ext4::inode::Inode};
+use crate::{Error, Result, Volume, ext4::InodeReader, ext4::inode::Inode};
 
 /// Represents a file in the ext4 filesystem
 pub struct File<R: Read + Seek> {
     reader: InodeReader<R>,
     position: u64,
+    path: PathBuf,
 }
 
 impl<R: Read + Seek> File<R> {
-    /// Create a new File from a volume and inode
+    /// Create a new File from a volume, inode, and path
     /// Accepts regular files and symlinks
-    pub(crate) fn new<F: Fn() -> R>(volume: &Volume<R, F>, inode: Inode) -> Result<Self> {
+    pub(crate) fn new<F: Fn() -> R>(
+        volume: &Volume<R, F>,
+        inode: Inode,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        let path = path.into();
         if !inode.is_regular_file() && !inode.is_symlink() {
-            return Err(Ext4Error::InvalidPath(
-                "Not a regular file or symlink".to_string(),
-            ));
+            return Err(Error::NotAFile(format!("{}", path.display())));
         }
 
         Ok(Self {
             reader: InodeReader::new(volume, inode),
             position: 0,
+            path,
         })
     }
 
@@ -42,6 +48,11 @@ impl<R: Read + Seek> File<R> {
     /// Check if this file is a symlink
     pub fn is_symlink(&self) -> bool {
         self.reader.inode().is_symlink()
+    }
+
+    /// Get the path of this file
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Read all contents of the file

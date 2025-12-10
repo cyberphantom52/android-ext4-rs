@@ -1,4 +1,4 @@
-use crate::{Ext4Error, Result};
+use crate::{Error, ParseContext, Result};
 use nom::Finish;
 use nom_derive::{NomLE, Parse};
 
@@ -21,7 +21,7 @@ impl ExtentHeader {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => Err(Error::nom_parse(ParseContext::ExtentHeader, e)),
         }
     }
 
@@ -50,7 +50,7 @@ impl ExtentIndex {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => Err(Error::nom_parse(ParseContext::ExtentIndex, e)),
         }
     }
 
@@ -77,7 +77,7 @@ impl Extent {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => Err(Error::nom_parse(ParseContext::Extent, e)),
         }
     }
 

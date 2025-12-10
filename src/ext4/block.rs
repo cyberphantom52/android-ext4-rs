@@ -2,7 +2,7 @@ use bitflags::bitflags;
 use nom::Finish;
 use nom_derive::{NomLE, Parse};
 
-use crate::{Ext4Error, Result};
+use crate::{Error, ParseContext, Result};
 
 #[derive(Debug, Clone, Copy, NomLE)]
 #[repr(C, packed)]
@@ -52,7 +52,7 @@ impl BlockGroupDescriptor {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => Err(Error::nom_parse(ParseContext::BlockGroupDescriptor, e)),
         }
     }
 

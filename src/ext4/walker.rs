@@ -106,20 +106,17 @@ impl WalkItem {
 impl<R: Read + Seek, F: Fn() -> R> DirectoryWalker<R, F> {
     pub(crate) fn new(directory: Directory<R, F>) -> Self {
         let entries = directory.entries().to_vec();
+        let path = directory.path.clone();
 
         Self {
             volume: directory.volume,
-            stack: vec![WalkEntry {
-                path: PathBuf::from("/"),
-                entries,
-            }],
+            stack: vec![WalkEntry { path, entries }],
         }
     }
 
     /// Create a walker starting from a specific path
     pub fn from_path(volume: &Volume<R, F>, path: impl AsRef<Path>) -> Result<Self> {
-        let inode = volume.lookup_path(&path)?;
-        let directory = Directory::new(volume, inode)?;
+        let directory = volume.open_dir(&path)?;
         Ok(Self::new(directory))
     }
 

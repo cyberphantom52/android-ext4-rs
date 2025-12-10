@@ -3,7 +3,7 @@ use std::io::{Read, Seek, SeekFrom};
 use crate::{
     Volume,
     ext4::{
-        ADDR_SIZE, Ext4Error, Result,
+        ADDR_SIZE, Error, Result,
         extent::{Extent, ExtentHeader, ExtentIndex},
         inode::Inode,
     },
@@ -43,7 +43,7 @@ impl<R: Read + Seek> InodeReader<R> {
         let file_size = self.inode.size();
 
         if offset >= file_size {
-            return Err(Ext4Error::ReadBeyondEof);
+            return Err(Error::ReadBeyondEof { file_size, offset });
         }
 
         let actual_length = std::cmp::min(length, (file_size - offset) as usize);

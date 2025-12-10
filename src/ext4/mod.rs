@@ -16,7 +16,8 @@ use inode_reader::InodeReader;
 pub use volume::Volume;
 pub use walker::{DirectoryWalker, EntryAttributes, WalkItem};
 
-use thiserror::Error;
+// Re-export errors from utils
+pub use crate::utils::{Error, ParseContext, Result};
 
 pub type Ext4Lblk = u32;
 pub type Ext4Fsblk = u64;
@@ -90,41 +91,3 @@ pub struct DirectorySearchResult {
     pub offset: usize,
     pub prev_offset: usize,
 }
-
-#[derive(Error, Debug)]
-pub enum Ext4Error {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Parse error: {0}")]
-    Parse(String),
-
-    #[error("Invalid magic number")]
-    InvalidMagic,
-
-    #[error("Invalid superblock")]
-    InvalidSuperblock,
-
-    #[error("Invalid inode: {0}")]
-    InvalidInode(u32),
-
-    #[error("Invalid block group: {0}")]
-    InvalidBlockGroup(u32),
-
-    #[error("Invalid extent")]
-    InvalidExtent,
-
-    #[error("File not found: {0}")]
-    FileNotFound(String),
-
-    #[error("Not a directory")]
-    NotADirectory,
-
-    #[error("Invalid path: {0}")]
-    InvalidPath(String),
-
-    #[error("Read beyond file size")]
-    ReadBeyondEof,
-}
-
-pub type Result<T> = std::result::Result<T, Ext4Error>;

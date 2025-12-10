@@ -1,11 +1,11 @@
 use std::{
     io::{Read, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
 use crate::{
-    Directory, Ext4Error, File, Result,
+    Directory, Error, File, Result,
     ext4::{
         DirectoryEntry, InodeReader,
         block::BlockGroupDescriptor,
@@ -81,8 +81,12 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
 
     /// Read a block group descriptor
     pub fn read_block_group_descriptor(&self, bg_index: u32) -> Result<BlockGroupDescriptor> {
-        if bg_index >= self.superblock.block_group_count() {
-            return Err(Ext4Error::InvalidBlockGroup(bg_index));
+        let block_group_count = self.superblock.block_group_count();
+        if bg_index >= block_group_count {
+            return Err(Error::InvalidBlockGroup {
+                index: bg_index,
+                count: block_group_count,
+            });
         }
 
         let desc_size = self.superblock.descriptor_size() as u64;
@@ -118,7 +122,7 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
     /// Read an inode from the filesystem
     pub fn read_inode(&self, inode_num: u32) -> Result<Inode> {
         if inode_num == 0 {
-            return Err(Ext4Error::InvalidInode(inode_num));
+            return Err(Error::inode_zero());
         }
 
         let inodes_per_group = self.superblock.inodes_per_group();
@@ -142,49 +146,63 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
         Inode::parse(&buffer)
     }
 
-    /// Lookup a path and return its inode
-    pub fn lookup_path(&self, path: impl AsRef<Path>) -> Result<Inode> {
-        let path = path.as_ref().normalize()?;
+    /// Lookup a path and return its inode along with the normalized path
+    fn lookup_path_with_normalized(&self, path: impl AsRef<Path>) -> Result<(Inode, PathBuf)> {
+        let original_path = path.as_ref();
+        let normalized_path = original_path.normalize()?;
 
         // Get components iterator
-        let mut components = path
+        let mut components = normalized_path
             .components()
             .filter(|c| matches!(c, std::path::Component::Normal(_)))
             .peekable();
 
         // If no components left, return root inode
         if components.peek().is_none() {
-            return self.read_inode(Inode::ROOT_INODE);
+            return Ok((self.read_inode(Inode::ROOT_INODE)?, PathBuf::from("/")));
         }
 
         let mut current_inode = self.read_inode(Inode::ROOT_INODE)?;
+        let mut current_path = PathBuf::from("/");
 
         for component in components {
-            let directory = Directory::new(self, current_inode)?;
+            let directory = Directory::new(self, current_inode, &current_path)?;
             let component_str = component
                 .as_os_str()
                 .to_str()
-                .ok_or_else(|| Ext4Error::FileNotFound("Invalid UTF-8 in path".to_string()))?;
+                .ok_or(Error::InvalidUtf8InPath)?;
 
             current_inode = match directory.find(component_str) {
                 Some(&entry) => self.read_inode(entry.inode)?,
-                None => return Err(Ext4Error::FileNotFound(component_str.to_string())),
+                None => {
+                    return Err(Error::PathNotFound {
+                        path: format!("{}", original_path.display()),
+                        component: component_str.to_string(),
+                    });
+                }
             };
+            current_path.push(component_str);
         }
 
-        Ok(current_inode)
+        Ok((current_inode, current_path))
+    }
+
+    /// Lookup a path and return its inode
+    pub fn lookup_path(&self, path: impl AsRef<Path>) -> Result<Inode> {
+        self.lookup_path_with_normalized(path)
+            .map(|(inode, _)| inode)
     }
 
     /// Open a file for reading
     pub fn open_file(&self, path: impl AsRef<Path>) -> Result<File<R>> {
-        let inode = self.lookup_path(path)?;
-        File::new(self, inode)
+        let (inode, normalized_path) = self.lookup_path_with_normalized(&path)?;
+        File::new(self, inode, normalized_path)
     }
 
     /// Open a directory for listing
     pub fn open_dir(&self, path: impl AsRef<Path>) -> Result<Directory<R, F>> {
-        let inode = self.lookup_path(path)?;
-        Directory::new(self, inode)
+        let (inode, normalized_path) = self.lookup_path_with_normalized(&path)?;
+        Directory::new(self, inode, normalized_path)
     }
 
     /// Read all data from an inode
@@ -224,7 +242,7 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
             let inode_num = u32::from_le_bytes(
                 data[offset..offset + 4]
                     .try_into()
-                    .map_err(|_| Ext4Error::ReadBeyondEof)?,
+                    .map_err(|_| Error::CorruptedDirectoryEntry(offset))?,
             );
 
             let entry_len = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);

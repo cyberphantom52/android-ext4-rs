@@ -1,7 +1,7 @@
 use nom::Finish;
 use nom_derive::{NomLE, Parse};
 
-use crate::{Ext4Error, Result};
+use crate::{Error, ParseContext, Result};
 
 #[derive(Debug, Clone, Copy, NomLE)]
 #[repr(C)]
@@ -21,7 +21,7 @@ impl XAttrHeader {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => Err(Error::nom_parse(ParseContext::XAttrHeader, e)),
         }
     }
 }
@@ -39,7 +39,7 @@ impl XAttrIbodyHeader {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => Err(Error::nom_parse(ParseContext::XAttrIbodyHeader, e)),
         }
     }
 }
@@ -59,7 +59,7 @@ impl XAttrEntryHeader {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => Err(Error::nom_parse(ParseContext::XAttrEntry, e)),
         }
     }
 
@@ -139,10 +139,15 @@ impl XAttrEntry {
                 break;
             }
 
+            let name_end = Self::HEADER_SIZE + header.name_len as usize;
+            let available = entry_data.len().saturating_sub(Self::HEADER_SIZE);
             let name = entry_data
-                .get(Self::HEADER_SIZE..Self::HEADER_SIZE + header.name_len as usize)
+                .get(Self::HEADER_SIZE..name_end)
                 .map(String::from_utf8_lossy)
-                .ok_or_else(|| Ext4Error::Parse("XAttrEntry: name out of bounds".to_string()))?
+                .ok_or_else(|| Error::XAttrNameOutOfBounds {
+                    name_len: header.name_len,
+                    available,
+                })?
                 .to_string();
 
             let mut value = None;
@@ -226,7 +231,7 @@ impl XAttrEntry {
             pub fn parse(bytes: &[u8]) -> Result<Self> {
                 match Parse::parse(bytes).finish() {
                     Ok((_, descriptor)) => Ok(descriptor),
-                    Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
+                    Err(e) => Err(Error::nom_parse(ParseContext::Capability, e)),
                 }
             }
 

@@ -3,7 +3,7 @@ use nom::Finish;
 use nom_derive::{NomLE, Parse};
 
 use crate::{
-    Ext4Error, Result,
+    Error, ParseContext, Result,
     ext4::xattr::{XAttrEntry, XAttrIbodyHeader},
 };
 
@@ -72,7 +72,7 @@ impl Inode {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let mut inode: Inode = match Parse::parse(bytes).finish() {
             Ok((_, descriptor)) => descriptor,
-            Err(e) => return Err(Ext4Error::Parse(format!("{:?}", e))),
+            Err(e) => return Err(Error::nom_parse(ParseContext::Inode, e)),
         };
 
         if inode.extra_isize > 0 {
@@ -80,7 +80,13 @@ impl Inode {
             let inode_size = bytes.len();
 
             let inline_data = bytes.get(start_offset..inode_size).ok_or_else(|| {
-                Ext4Error::Parse("Inode extra size exceeds available data".to_string())
+                Error::invalid_data(
+                    ParseContext::Inode,
+                    format!(
+                        "extra_isize ({}) exceeds available data (inode size: {})",
+                        inode.extra_isize, inode_size
+                    ),
+                )
             })?;
 
             inode.inline_xattrs = Self::parse_inline_xattr(inline_data)?;

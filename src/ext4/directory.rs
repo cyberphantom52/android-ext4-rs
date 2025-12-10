@@ -1,22 +1,29 @@
 use std::io::{Read, Seek};
+use std::path::{Path, PathBuf};
 
 use crate::{
-    DirectoryWalker, Ext4Error, Result, Volume,
+    DirectoryWalker, Error, Result, Volume,
     ext4::{DirectoryEntry, InodeReader, inode::Inode},
 };
 
 /// Represents a directory in the ext4 filesystem
 pub struct Directory<R: Read + Seek, F: Fn() -> R> {
     pub(crate) volume: Volume<R, F>,
+    pub(crate) path: PathBuf,
     inode: Inode,
     entries: Vec<DirectoryEntry>,
 }
 
 impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
-    /// Create a new Directory from a volume and inode
-    pub(crate) fn new(volume: &Volume<R, F>, inode: Inode) -> Result<Self> {
+    /// Create a new Directory from a volume, inode, and path
+    pub(crate) fn new(
+        volume: &Volume<R, F>,
+        inode: Inode,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        let path = path.into();
         if !inode.is_directory() {
-            return Err(Ext4Error::NotADirectory);
+            return Err(Error::NotADirectory(format!("{}", path.display())));
         }
 
         let mut reader = InodeReader::new(volume, inode.clone());
@@ -25,6 +32,7 @@ impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
 
         Ok(Self {
             volume: volume.clone(),
+            path,
             inode,
             entries,
         })
@@ -33,6 +41,11 @@ impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
     /// Get a reference to the inode
     pub fn inode(&self) -> &Inode {
         &self.inode
+    }
+
+    /// Get the path of this directory
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Get all entries
