@@ -122,24 +122,19 @@ impl Inode {
         ((self.osd2.gid_high as u32) << 16) | (self.gid as u32)
     }
 
-    /// Get the file type from the inode
-    pub fn file_type(&self) -> Option<FileType> {
-        FileType::from_mode(self.mode.bits())
-    }
-
     /// Check if this is a directory
     pub fn is_directory(&self) -> bool {
-        matches!(self.file_type(), Some(FileType::Directory))
+        matches!(self.mode.file_type(), Some(FileType::Directory))
     }
 
     /// Check if this is a regular file
     pub fn is_regular_file(&self) -> bool {
-        matches!(self.file_type(), Some(FileType::RegularFile))
+        matches!(self.mode.file_type(), Some(FileType::RegularFile))
     }
 
     /// Check if this is a symbolic link
     pub fn is_symlink(&self) -> bool {
-        matches!(self.file_type(), Some(FileType::SymbolicLink))
+        matches!(self.mode.file_type(), Some(FileType::SymbolicLink))
     }
 
     /// Check if this inode is a fast symlink (data stored inline in block pointers)
@@ -244,6 +239,11 @@ impl Mode {
     /// Get the permission bits as an octal string (e.g., "0755")
     pub fn permissions_string(&self) -> String {
         format!("{:04o}", self.permissions())
+    }
+
+    /// Get the file type from the inode
+    pub fn file_type(&self) -> Option<FileType> {
+        FileType::from_mode(self.bits())
     }
 }
 

@@ -91,7 +91,10 @@ impl WalkItem {
     }
 
     pub fn r#type(&self) -> FileType {
-        self.inode.file_type().expect("Invalid file type in inode")
+        self.inode
+            .mode()
+            .file_type()
+            .expect("Invalid file type in inode")
     }
 
     /// Get the name of this entry

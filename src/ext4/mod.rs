@@ -14,7 +14,7 @@ pub use file::File;
 pub use inode::FileType;
 use inode_reader::InodeReader;
 pub use volume::Volume;
-pub use walker::{DirectoryWalker, WalkItem};
+pub use walker::{DirectoryWalker, EntryAttributes, WalkItem};
 
 use thiserror::Error;
 
