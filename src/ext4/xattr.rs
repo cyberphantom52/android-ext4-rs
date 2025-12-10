@@ -203,7 +203,7 @@ impl XAttrEntry {
             .map(|v| v.strip_suffix(&[0]))
             .unwrap_or(self.value.as_deref())?;
 
-        return Some(String::from_utf8_lossy(trimmed).to_string());
+        Some(String::from_utf8_lossy(trimmed).to_string())
     }
 
     /// Parse capability value and return it as a hex string
@@ -231,7 +231,7 @@ impl XAttrEntry {
             }
 
             pub fn capabilities(&self) -> Option<u64> {
-                let permitted_lo = self.data.get(0)?.permitted;
+                let permitted_lo = self.data.first()?.permitted;
                 let permitted_hi = self.data.get(1)?.permitted;
 
                 let caps = ((permitted_hi as u64) << 32) | (permitted_lo as u64);

@@ -62,7 +62,7 @@ impl<R: Read + Seek> Read for File<R> {
         let data = self
             .reader
             .read_data(self.position, to_read)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         let bytes_read = data.len();
         buf[..bytes_read].copy_from_slice(&data);

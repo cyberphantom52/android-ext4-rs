@@ -209,41 +209,40 @@ impl<F: Fn() -> BufReader<File> + Sync + Send> Extractor<F> {
         let extract_dir = self.extract_dir();
         let target = extract_dir.join(path.strip_prefix("/").unwrap_or(path));
 
-        if let Some(parent) = target.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = target.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
         }
 
         match item.r#type() {
             FileType::RegularFile => {
                 let mut file = File::create(&target)?;
                 let mut file_reader = self.volume.open_file(item.path()).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to open file {}: {}", item.path().display(), e),
-                    )
+                    io::Error::other(format!(
+                        "Failed to open file {}: {}",
+                        item.path().display(),
+                        e
+                    ))
                 })?;
                 io::copy(&mut file_reader, &mut file)?;
             }
             FileType::SymbolicLink => {
                 let mut file_reader = self.volume.open_file(item.path()).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to read symlink {}: {}", item.path().display(), e),
-                    )
+                    io::Error::other(format!(
+                        "Failed to read symlink {}: {}",
+                        item.path().display(),
+                        e
+                    ))
                 })?;
 
                 let mut link_target = String::new();
                 file_reader.read_to_string(&mut link_target).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!(
-                            "Failed to read symlink target {}: {}",
-                            item.path().display(),
-                            e
-                        ),
-                    )
+                    io::Error::other(format!(
+                        "Failed to read symlink target {}: {}",
+                        item.path().display(),
+                        e
+                    ))
                 })?;
 
                 let _ = fs::remove_file(&target);

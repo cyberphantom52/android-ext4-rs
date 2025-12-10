@@ -111,7 +111,7 @@ impl<R: Read + Seek> InodeReader<R> {
         let start_block = offset / block_size;
         let end_block = (offset + buf.len() as u64).div_ceil(block_size);
         let mut bytes_read = 0;
-        let inode_block = self.inode.block.clone();
+        let inode_block = self.inode.block;
 
         for block_idx in start_block..end_block {
             let block_offset = if block_idx == start_block {

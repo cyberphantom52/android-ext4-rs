@@ -83,7 +83,7 @@ impl Inode {
                 Ext4Error::Parse("Inode extra size exceeds available data".to_string())
             })?;
 
-            inode.inline_xattrs = Self::parse_inline_xattr(&inline_data)?;
+            inode.inline_xattrs = Self::parse_inline_xattr(inline_data)?;
         }
 
         Ok(inode)
@@ -311,13 +311,4 @@ pub struct Linux2 {
     pub gid_high: u16,
     pub checksum_lo: u16,
     pub reserved: u16,
-}
-
-impl Linux2 {
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
-        match Parse::parse(bytes).finish() {
-            Ok((_, descriptor)) => Ok(descriptor),
-            Err(e) => Err(Ext4Error::Parse(format!("{:?}", e))),
-        }
-    }
 }
