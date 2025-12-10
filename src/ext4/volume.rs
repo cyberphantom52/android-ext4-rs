@@ -173,7 +173,7 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
                 .ok_or(Error::InvalidUtf8InPath)?;
 
             current_inode = match directory.find(component_str) {
-                Some(&entry) => self.read_inode(entry.inode)?,
+                Some(entry) => self.read_inode(entry.inode)?,
                 None => {
                     return Err(Error::PathNotFound {
                         path: format!("{}", original_path.display()),
@@ -227,55 +227,5 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
         }
 
         Ok(xattrs)
-    }
-
-    /// Parse directory entries from raw data
-    pub fn parse_directory_entries(data: &[u8]) -> Result<Vec<DirectoryEntry>> {
-        let mut entries = Vec::new();
-        let mut offset = 0;
-
-        while offset < data.len() {
-            if offset + DirectoryEntry::HEADER_SIZE > data.len() {
-                break;
-            }
-
-            let inode_num = u32::from_le_bytes(
-                data[offset..offset + 4]
-                    .try_into()
-                    .map_err(|_| Error::CorruptedDirectoryEntry(offset))?,
-            );
-
-            let entry_len = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
-
-            if entry_len == 0 || entry_len as usize > data.len() - offset {
-                break;
-            }
-
-            if inode_num != 0 {
-                let name_len = data[offset + 6];
-                let inode_type = data[offset + 7];
-
-                let mut name = [0u8; DirectoryEntry::MAX_NAME_LEN];
-                let actual_name_len = DirectoryEntry::MAX_NAME_LEN.min(name_len as usize);
-                if offset + DirectoryEntry::HEADER_SIZE + actual_name_len <= data.len() {
-                    name[..actual_name_len].copy_from_slice(
-                        &data[offset + DirectoryEntry::HEADER_SIZE
-                            ..offset + DirectoryEntry::HEADER_SIZE + actual_name_len],
-                    );
-                }
-
-                entries.push(DirectoryEntry {
-                    inode: inode_num,
-                    entry_len,
-                    name_len,
-                    inode_type,
-                    name,
-                });
-            }
-
-            offset += entry_len as usize;
-        }
-
-        Ok(entries)
     }
 }

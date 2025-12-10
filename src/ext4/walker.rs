@@ -7,7 +7,6 @@ use crate::ext4::{
     DirectoryEntry, Result, Volume,
     directory::Directory,
     inode::{FileType, Inode, Mode},
-    inode_reader::InodeReader,
 };
 
 /// A walker for recursive directory traversal
@@ -105,8 +104,8 @@ impl WalkItem {
 
 impl<R: Read + Seek, F: Fn() -> R> DirectoryWalker<R, F> {
     pub(crate) fn new(directory: Directory<R, F>) -> Self {
-        let entries = directory.entries().to_vec();
-        let path = directory.path.clone();
+        let entries = directory.entries().unwrap_or_default();
+        let path = directory.path().to_path_buf();
 
         Self {
             volume: directory.volume,
@@ -151,17 +150,14 @@ impl<R: Read + Seek, F: Fn() -> R> Iterator for DirectoryWalker<R, F> {
             };
 
             if inode.is_directory() {
-                let mut reader = InodeReader::new(&self.volume, inode.clone());
-                match reader.read_all() {
-                    Ok(data) => match Volume::<R, F>::parse_directory_entries(&data) {
-                        Ok(entries) => {
-                            self.stack.push(WalkEntry {
-                                path: item_path.clone(),
-                                entries,
-                            });
-                        }
-                        Err(e) => return Some(Err(e)),
-                    },
+                let directory = Directory::new(&self.volume, inode.clone(), &item_path).ok()?;
+                match directory.entries() {
+                    Ok(entries) => {
+                        self.stack.push(WalkEntry {
+                            path: directory.path().to_path_buf(),
+                            entries,
+                        });
+                    }
                     Err(e) => return Some(Err(e)),
                 }
             }
