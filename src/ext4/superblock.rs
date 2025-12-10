@@ -24,7 +24,7 @@ pub struct Superblock {
     mount_count: u16,
     max_mount_count: u16,
 
-    #[nom(Verify = "*magic == 0xEF53")]
+    #[nom(Verify(*magic == 0xEF53))]
     magic: u16,
 
     state: State,
@@ -49,30 +49,18 @@ pub struct Superblock {
     #[nom(Parse = "ReadOnlyCompatibleFeatures::parse")]
     features_read_only: ReadOnlyCompatibleFeatures,
 
-    #[nom(Count = "16")]
-    uuid: Vec<u8>,
-
-    #[nom(Count = "16")]
-    volume_name: Vec<u8>,
-
-    #[nom(Count = "64")]
-    last_mounted: Vec<u8>,
-
+    uuid: [u8; 16],
+    volume_name: [u8; 16],
+    last_mounted: [u8; 64],
     algorithm_usage_bitmap: u32,
     s_prealloc_blocks: u8,
     s_prealloc_dir_blocks: u8,
     s_reserved_gdt_blocks: u16,
-
-    #[nom(Count = "16")]
-    journal_uuid: Vec<u8>,
-
+    journal_uuid: [u8; 16],
     journal_inode_number: u32,
     journal_dev: u32,
     last_orphan: u32,
-
-    #[nom(Count = "4")]
-    hash_seed: Vec<u32>,
-
+    hash_seed: [u32; 4],
     default_hash_version: DefaultHashVersion,
     journal_backup_type: u8,
     desc_size: u16,
@@ -82,10 +70,7 @@ pub struct Superblock {
 
     first_meta_bg: u32,
     mkfs_time: u32,
-
-    #[nom(Count = "17")]
-    journal_blocks: Vec<u32>,
-
+    journal_blocks: [u32; 17],
     blocks_count_hi: u32,
     reserved_blocks_count_hi: u32,
     free_blocks_count_hi: u32,
@@ -109,40 +94,22 @@ pub struct Superblock {
     first_error_time: u32,
     first_error_ino: u32,
     first_error_block: u64,
-
-    #[nom(Count = "32")]
-    first_error_func: Vec<u8>,
-
+    first_error_func: [u8; 32],
     first_error_line: u32,
     last_error_time: u32,
     last_error_ino: u32,
     last_error_line: u32,
     last_error_block: u64,
-
-    #[nom(Count = "32")]
-    last_error_func: Vec<u8>,
-
-    #[nom(Count = "64")]
-    mount_opts: Vec<u8>,
-
+    last_error_func: [u8; 32],
+    mount_opts: [u8; 64],
     usr_quota_inum: u32,
     grp_quota_inum: u32,
     overhead_clusters: u32,
-
-    #[nom(Count = "2")]
-    backup_bgs: Vec<u32>,
-
-    #[nom(Count = "4")]
-    encrypt_algos: Vec<EncryptionAlgorithm>,
-
-    #[nom(Count = "16")]
-    encrypt_pw_salt: Vec<u8>,
-
+    backup_bgs: [u32; 2],
+    encrypt_algos: [EncryptionAlgorithm; 4],
+    encrypt_pw_salt: [u8; 16],
     lpf_ino: u32,
-
-    #[nom(Count = "100")]
-    padding: Vec<u32>,
-
+    padding: [u32; 100],
     checksum: u32,
 }
 
@@ -164,10 +131,8 @@ impl Superblock {
 
     pub fn block_group_count(&self) -> u32 {
         let blocks_per_group = self.blocks_per_group as u64;
-        let mut block_group_count = self.blocks_count() / blocks_per_group;
-        if !self.blocks_count().is_multiple_of(blocks_per_group) {
-            block_group_count += 1;
-        }
+        let block_group_count = self.blocks_count().div_ceil(blocks_per_group);
+
         block_group_count as u32
     }
 
@@ -206,10 +171,15 @@ impl Superblock {
         self.inode_size as u64
     }
 
-    pub fn volume_name(&self) -> String {
-        String::from_utf8_lossy(&self.volume_name)
-            .trim_end_matches('\0')
-            .to_string()
+    pub fn volume_name(&self) -> &str {
+        // Find the first null byte or use the full length
+        let end = self
+            .volume_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.volume_name.len());
+        // Safety: volume names in ext4 are ASCII, but use lossy conversion for safety
+        std::str::from_utf8(&self.volume_name[..end]).unwrap_or("")
     }
 }
 
