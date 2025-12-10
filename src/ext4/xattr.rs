@@ -223,8 +223,7 @@ impl XAttrEntry {
         #[derive(Debug, NomLE)]
         struct VfsCapData {
             _magic_etc: u32,
-            #[nom(Count = "2")] // VFS_CAP_U32
-            data: Vec<CapData>,
+            data: [CapData; 2], // VFS_CAP_U32
         }
 
         impl VfsCapData {
