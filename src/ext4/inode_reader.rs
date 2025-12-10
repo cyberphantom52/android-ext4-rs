@@ -6,6 +6,7 @@ use crate::{
         ADDR_SIZE, Error, Result,
         extent::{Extent, ExtentHeader, ExtentIndex},
         inode::Inode,
+        xattr::{self, XAttrEntry},
     },
 };
 
@@ -64,7 +65,7 @@ impl<R: Read + Seek> InodeReader<R> {
     }
 
     fn read_via_extents(&mut self, inode: &Inode, offset: u64, buf: &mut [u8]) -> Result<()> {
-        let extents = self.parse_extent_tree(&inode.block.clone())?;
+        let extents = self.parse_extent_tree(&inode.block)?;
         let mut bytes_read = 0;
 
         for extent in extents {
@@ -139,6 +140,24 @@ impl<R: Read + Seek> InodeReader<R> {
         self.reader.read_exact(&mut buffer)?;
 
         Ok(buffer)
+    }
+
+    /// Read extended attributes for an inode
+    pub fn read_xattrs(&mut self, inode: &Inode) -> Result<Vec<XAttrEntry>> {
+        let mut xattrs = Vec::new();
+
+        // Add inline xattrs (already parsed during Inode::parse)
+        xattrs.extend(inode.xattrs().iter().cloned());
+
+        // Check for external xattr block
+        if let Some(xattr_block) = inode.xattr_block_number() {
+            let block_data = self.read_block(xattr_block)?;
+            if let Ok(block_xattrs) = xattr::parse_xattrs_from_block(&block_data) {
+                xattrs.extend(block_xattrs);
+            }
+        }
+
+        Ok(xattrs)
     }
 
     fn read_block_addr(&mut self, block_num: u64, index: u32) -> Result<u64> {

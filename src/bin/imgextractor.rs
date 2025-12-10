@@ -69,14 +69,16 @@ impl<F: Fn() -> BufReader<File> + Sync + Send> Extractor<F> {
     fn new(reader_factory: F, arguments: Arguments) -> io::Result<Self> {
         let volume = Volume::new(reader_factory)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
-        let mount_name = volume.name().unwrap_or(
-            arguments
-                .image
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-                .to_string(),
-        );
+        let mount_name = volume
+            .name()
+            .unwrap_or(
+                arguments
+                    .image
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown"),
+            )
+            .to_string();
 
         let config_dir = arguments.output_dir.join("config");
         let extract_dir = arguments.output_dir.join(&mount_name);

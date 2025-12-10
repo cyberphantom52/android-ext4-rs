@@ -7,6 +7,7 @@ use crate::ext4::{
     DirectoryEntry, Result, Volume,
     directory::Directory,
     inode::{FileType, Inode, Mode},
+    inode_reader::InodeReader,
 };
 
 /// A walker for recursive directory traversal
@@ -150,19 +151,23 @@ impl<R: Read + Seek, F: Fn() -> R> Iterator for DirectoryWalker<R, F> {
             };
 
             if inode.is_directory() {
-                let directory = Directory::new(&self.volume, inode.clone(), &item_path).ok()?;
-                match directory.entries() {
-                    Ok(entries) => {
-                        self.stack.push(WalkEntry {
-                            path: directory.path().to_path_buf(),
-                            entries,
-                        });
-                    }
+                match Directory::new(&self.volume, inode.clone(), &item_path) {
                     Err(e) => return Some(Err(e)),
+                    Ok(directory) => match directory.entries() {
+                        Err(e) => return Some(Err(e)),
+                        Ok(entries) => {
+                            self.stack.push(WalkEntry {
+                                path: directory.path().to_path_buf(),
+                                entries,
+                            });
+                        }
+                    },
                 }
             }
 
-            let xattrs = self.volume.read_xattrs(&inode).unwrap_or_default();
+            let xattrs = InodeReader::new(&self.volume)
+                .read_xattrs(&inode)
+                .unwrap_or_default();
             let attributes = EntryAttributes {
                 mode: inode.mode(),
                 uid: inode.uid(),

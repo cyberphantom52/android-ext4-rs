@@ -6,13 +6,7 @@ use std::{
 
 use crate::{
     Directory, Error, File, Result,
-    ext4::{
-        InodeReader,
-        block::BlockGroupDescriptor,
-        inode::Inode,
-        superblock::Superblock,
-        xattr::{self, XAttrEntry},
-    },
+    ext4::{block::BlockGroupDescriptor, inode::Inode, superblock::Superblock},
     utils::NormalizePath,
 };
 
@@ -61,11 +55,12 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
     }
 
     /// Get the volume name
-    pub fn name(&self) -> Option<String> {
-        if self.superblock.volume_name().is_empty() {
+    pub fn name(&self) -> Option<&str> {
+        let volume_name = self.superblock.volume_name();
+        if volume_name.is_empty() {
             None
         } else {
-            Some(self.superblock.volume_name().to_string())
+            Some(volume_name)
         }
     }
 
@@ -104,19 +99,6 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
         reader.read_exact(&mut buffer)?;
 
         BlockGroupDescriptor::parse(&buffer)
-    }
-
-    /// Read a block from the filesystem
-    pub fn read_block(&self, block_num: u64) -> Result<Vec<u8>> {
-        let offset = block_num * self.block_size as u64;
-
-        let mut reader = self.reader();
-        reader.seek(SeekFrom::Start(offset))?;
-
-        let mut buffer = vec![0u8; self.block_size as usize];
-        reader.read_exact(&mut buffer)?;
-
-        Ok(buffer)
     }
 
     /// Read an inode from the filesystem
@@ -203,29 +185,5 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
     pub fn open_dir(&self, path: impl AsRef<Path>) -> Result<Directory<R, F>> {
         let (inode, normalized_path) = self.lookup_path_with_normalized(&path)?;
         Directory::new(self, inode, normalized_path)
-    }
-
-    /// Read all data from an inode
-    pub fn read_inode_data(&self, inode: &Inode) -> Result<Vec<u8>> {
-        let mut reader = InodeReader::new(self);
-        reader.read_all(inode)
-    }
-
-    /// Read extended attributes for an inode
-    pub fn read_xattrs(&self, inode: &Inode) -> Result<Vec<XAttrEntry>> {
-        let mut xattrs = Vec::new();
-
-        // Add inline xattrs (already parsed during Inode::parse)
-        xattrs.extend(inode.xattrs().iter().cloned());
-
-        // Check for external xattr block
-        if let Some(xattr_block) = inode.xattr_block_number() {
-            let block_data = self.read_block(xattr_block)?;
-            if let Ok(block_xattrs) = xattr::parse_xattrs_from_block(&block_data) {
-                xattrs.extend(block_xattrs);
-            }
-        }
-
-        Ok(xattrs)
     }
 }
