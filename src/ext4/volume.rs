@@ -7,7 +7,7 @@ use std::{
 use crate::{
     Directory, Error, File, Result,
     ext4::{
-        DirectoryEntry, InodeReader,
+        InodeReader,
         block::BlockGroupDescriptor,
         inode::Inode,
         superblock::Superblock,
@@ -207,8 +207,8 @@ impl<R: Read + Seek, F: Fn() -> R> Volume<R, F> {
 
     /// Read all data from an inode
     pub fn read_inode_data(&self, inode: &Inode) -> Result<Vec<u8>> {
-        let mut reader = InodeReader::new(self, inode.clone());
-        reader.read_all()
+        let mut reader = InodeReader::new(self);
+        reader.read_all(inode)
     }
 
     /// Read extended attributes for an inode

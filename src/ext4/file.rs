@@ -6,6 +6,7 @@ use crate::{Error, Result, Volume, ext4::InodeReader, ext4::inode::Inode};
 /// Represents a file in the ext4 filesystem
 pub struct File<R: Read + Seek> {
     reader: InodeReader<R>,
+    inode: Inode,
     position: u64,
     path: PathBuf,
 }
@@ -24,7 +25,8 @@ impl<R: Read + Seek> File<R> {
         }
 
         Ok(Self {
-            reader: InodeReader::new(volume, inode),
+            reader: InodeReader::new(volume),
+            inode,
             position: 0,
             path,
         })
@@ -32,7 +34,7 @@ impl<R: Read + Seek> File<R> {
 
     /// Get the file size
     pub fn size(&self) -> u64 {
-        self.reader.size()
+        self.inode.size()
     }
 
     /// Get the current position in the file
@@ -42,12 +44,12 @@ impl<R: Read + Seek> File<R> {
 
     /// Get a reference to the inode
     pub fn inode(&self) -> &Inode {
-        self.reader.inode()
+        &self.inode
     }
 
     /// Check if this file is a symlink
     pub fn is_symlink(&self) -> bool {
-        self.reader.inode().is_symlink()
+        self.inode().is_symlink()
     }
 
     /// Get the path of this file
@@ -58,7 +60,7 @@ impl<R: Read + Seek> File<R> {
     /// Read all contents of the file
     pub fn read_all(&mut self) -> Result<Vec<u8>> {
         self.position = 0;
-        self.reader.read_all()
+        self.reader.read_all(&self.inode)
     }
 }
 
@@ -72,7 +74,7 @@ impl<R: Read + Seek> Read for File<R> {
 
         let data = self
             .reader
-            .read_data(self.position, to_read)
+            .read_data(&self.inode, self.position, to_read)
             .map_err(std::io::Error::other)?;
 
         let bytes_read = data.len();

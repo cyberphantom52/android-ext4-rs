@@ -13,34 +13,24 @@ use crate::{
 pub(crate) struct InodeReader<R: Read + Seek> {
     reader: R,
     block_size: u32,
-    inode: Inode,
 }
 
 impl<R: Read + Seek> InodeReader<R> {
-    pub fn new<F: Fn() -> R>(volume: &Volume<R, F>, inode: Inode) -> Self {
+    pub fn new<F: Fn() -> R>(volume: &Volume<R, F>) -> Self {
         Self {
             reader: volume.reader(),
             block_size: volume.block_size(),
-            inode,
         }
     }
 
-    pub fn inode(&self) -> &Inode {
-        &self.inode
-    }
-
-    pub fn size(&self) -> u64 {
-        self.inode.size()
-    }
-
     /// Read all data from the inode
-    pub fn read_all(&mut self) -> Result<Vec<u8>> {
-        self.read_data(0, self.size() as usize)
+    pub fn read_all(&mut self, inode: &Inode) -> Result<Vec<u8>> {
+        self.read_data(inode, 0, inode.size() as usize)
     }
 
     /// Read data at a given offset
-    pub fn read_data(&mut self, offset: u64, length: usize) -> Result<Vec<u8>> {
-        let file_size = self.inode.size();
+    pub fn read_data(&mut self, inode: &Inode, offset: u64, length: usize) -> Result<Vec<u8>> {
+        let file_size = inode.size();
 
         if offset >= file_size {
             return Err(Error::ReadBeyondEof { file_size, offset });
@@ -49,21 +39,20 @@ impl<R: Read + Seek> InodeReader<R> {
         let actual_length = std::cmp::min(length, (file_size - offset) as usize);
         let mut result = vec![0u8; actual_length];
 
-        if self.inode.is_fast_symlink() {
-            self.read_fast_symlink(offset, &mut result);
-        } else if self.inode.uses_extents() {
-            self.read_via_extents(offset, &mut result)?;
+        if inode.is_fast_symlink() {
+            self.read_fast_symlink(inode, offset, &mut result);
+        } else if inode.uses_extents() {
+            self.read_via_extents(inode, offset, &mut result)?;
         } else {
-            self.read_via_indirect(offset, &mut result)?;
+            self.read_via_indirect(inode, offset, &mut result)?;
         }
 
         Ok(result)
     }
 
     /// Read data from a fast symlink (inline in inode.block)
-    fn read_fast_symlink(&self, offset: u64, buf: &mut [u8]) {
-        let inline_data: Vec<u8> = self
-            .inode
+    fn read_fast_symlink(&self, inode: &Inode, offset: u64, buf: &mut [u8]) {
+        let inline_data: Vec<u8> = inode
             .block
             .iter()
             .flat_map(|&word| word.to_le_bytes())
@@ -74,8 +63,8 @@ impl<R: Read + Seek> InodeReader<R> {
         buf.copy_from_slice(&inline_data[start..end]);
     }
 
-    fn read_via_extents(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
-        let extents = self.parse_extent_tree(&self.inode.block.clone())?;
+    fn read_via_extents(&mut self, inode: &Inode, offset: u64, buf: &mut [u8]) -> Result<()> {
+        let extents = self.parse_extent_tree(&inode.block.clone())?;
         let mut bytes_read = 0;
 
         for extent in extents {
@@ -106,12 +95,12 @@ impl<R: Read + Seek> InodeReader<R> {
         Ok(())
     }
 
-    fn read_via_indirect(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
+    fn read_via_indirect(&mut self, inode: &Inode, offset: u64, buf: &mut [u8]) -> Result<()> {
         let block_size = self.block_size as u64;
         let start_block = offset / block_size;
         let end_block = (offset + buf.len() as u64).div_ceil(block_size);
         let mut bytes_read = 0;
-        let inode_block = self.inode.block;
+        let inode_block = inode.block;
 
         for block_idx in start_block..end_block {
             let block_offset = if block_idx == start_block {

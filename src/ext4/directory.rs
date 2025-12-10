@@ -44,7 +44,7 @@ impl<R: Read + Seek, F: Fn() -> R> Directory<R, F> {
 
     /// Parse directory entries from raw data
     pub fn entries(&self) -> Result<Vec<DirectoryEntry>> {
-        let data = InodeReader::new(&self.volume, self.inode().clone()).read_all()?;
+        let data = InodeReader::new(&self.volume).read_all(&self.inode)?;
         let mut entries = Vec::new();
         let mut offset = 0;
 

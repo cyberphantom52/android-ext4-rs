@@ -144,7 +144,7 @@ impl XAttrEntry {
             let name = entry_data
                 .get(Self::HEADER_SIZE..name_end)
                 .map(String::from_utf8_lossy)
-                .ok_or_else(|| Error::XAttrNameOutOfBounds {
+                .ok_or(Error::XAttrNameOutOfBounds {
                     name_len: header.name_len,
                     available,
                 })?
