@@ -97,7 +97,9 @@ impl Inode {
 
     /// Parse xattrs from inline inode data
     fn parse_inline_xattr(inline_data: &[u8]) -> Result<Vec<XAttrEntry>> {
-        if inline_data.len() < XAttrIbodyHeader::SIZE {
+        if inline_data.len() < XAttrIbodyHeader::SIZE
+            || inline_data.starts_with(&[0; XAttrIbodyHeader::SIZE])
+        {
             return Ok(Vec::new());
         }
 
