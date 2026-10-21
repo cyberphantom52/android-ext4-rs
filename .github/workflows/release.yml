@@ -1,0 +1,66 @@
+name: Linux release
+
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.93.1 --profile minimal
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(cargo +1.93.1 metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          test "$GITHUB_REF_NAME" = "v$version"
+      - name: Test and build
+        run: |
+          cargo +1.93.1 test --locked
+          cargo +1.93.1 build --locked --release --bin imgextractor
+          target/release/imgextractor --help
+          mkdir -p /tmp/ext4-fixture/sub
+          printf 'evelyn fixture\n' > /tmp/ext4-fixture/sub/file
+          ln -s sub/file /tmp/ext4-fixture/link
+          truncate -s 16M /tmp/ext4-fixture.img
+          /usr/sbin/mke2fs -q -t ext4 -L fixture -d /tmp/ext4-fixture /tmp/ext4-fixture.img
+          target/release/imgextractor -t 1 -o /tmp/ext4-output /tmp/ext4-fixture.img
+          cmp /tmp/ext4-fixture/sub/file /tmp/ext4-output/fixture/sub/file
+          test "$(readlink /tmp/ext4-output/fixture/link)" = sub/file
+      - name: Package verified executable
+        run: |
+          set -euo pipefail
+          name="imgextractor-rs-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/imgextractor "dist/$name/imgextractor-rs"
+          cp LICENSE "dist/$name/"
+          {
+            git rev-parse HEAD
+            git submodule status --recursive
+            rustc +1.93.1 --version
+            cargo +1.93.1 --version
+            sha256sum Cargo.lock
+            ldd target/release/imgextractor
+          } > "dist/$name/BUILD-INFO.txt"
+          tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" --owner=0 --group=0 --numeric-owner -czf "dist/$name.tar.gz" -C dist "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          mkdir dist/check
+          tar -xzf "dist/$name.tar.gz" -C dist/check
+          "dist/check/$name/imgextractor-rs" --help
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="imgextractor-rs-${GITHUB_REF_NAME}-linux-x86_64"
+          gh release create "$GITHUB_REF_NAME" "dist/$name.tar.gz" "dist/$name.tar.gz.sha256" \
+            --verify-tag --title "$GITHUB_REF_NAME" --notes-file "dist/$name/BUILD-INFO.txt"
